@@ -1,16 +1,17 @@
-import bpy
-
-
 bl_info = {
     "name": "Sprite Sheet Render Toolkit",
-    "author": "Previo Prakasa (github.com/previoip)",
-    "version": (0, 0, 1),
     "blender": (2, 80, 0),
+    "category": "Render",
+    "support": "COMMUNITY",
+    "author": "Previo Prakasa (github.com/previoip)",
+    "version": (1, 0, 1),
     "location": "View3D > Properties > Render",
     "description": "Render toolkit using camera manipulation for generating 2D sprite sheet from 3D assets.",
     "warning": "This is an experimental project and should not be used in any form of production (as of today).",
 }
 
+import bpy
+from bpy.types import PropertyGroup
 from bpy.props import (
     BoolProperty,
     IntProperty,
@@ -21,9 +22,7 @@ from bpy.props import (
     PointerProperty
 )
 
-from bpy.types import PropertyGroup
-
-class SPSPRT_PropertyGroup(PropertyGroup):
+class SPRSHTT_PropertyGroup(PropertyGroup):
 
     str_export_folder: StringProperty(
         name='Export Folder', 
@@ -124,8 +123,8 @@ class SPSPRT_PropertyGroup(PropertyGroup):
         )
 
 
-class SPSPRT_PT_render_panel(bpy.types.Panel):
-    bl_label        = 'SPSPRT Toolkit'
+class SPRSHTT_PT_render_panel(bpy.types.Panel):
+    bl_label        = 'Sprite Sheet Toolkit'
     bl_idname       = 'SCENE_PT_layout'
     bl_space_type   = 'PROPERTIES'
     bl_region_type  = 'WINDOW'
@@ -136,25 +135,21 @@ class SPSPRT_PT_render_panel(bpy.types.Panel):
         layout = self.layout
         col = layout.column()
         row = col.row()
-        row.prop(context.scene.spsprt_properties, 'str_export_folder')  
+        row.prop(context.scene.sprshtt_properties, 'str_export_folder')  
 
-classes = (SPSPRT_PT_render_panel, SPSPRT_PropertyGroup)
+classes = (SPRSHTT_PT_render_panel, SPRSHTT_PropertyGroup)
 
 def register():
-
     for cl in classes:
         bpy.utils.register_class(cl)
-    bpy.types.Scene.spsprt_properties = PointerProperty(type=SPSPRT_PropertyGroup)
-    unregister()
+    bpy.types.Scene.sprshtt_properties = PointerProperty(type=SPRSHTT_PropertyGroup)
 
 def unregister():
     for cl in classes:
         bpy.utils.unregister_class(cl)
-    delattr(bpy.types.Scene, 'spsprt_properties')
+    delattr(bpy.types.Scene, 'sprshtt_properties')
 
 if __name__ == '__main__':
-    import os
-
     register()
 
     
