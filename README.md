@@ -1,2 +1,3 @@
 # blender-sprite-render-toolkit
-Goal: Blender render toolkit for rendering animated assets into character spritesheet
+
+Camera manipulation and render toolkit for generating character spritesheet from 3D assets into bitmap
