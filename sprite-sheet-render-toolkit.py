@@ -4,7 +4,7 @@ bl_info = {
     "category": "Render",
     "support": "COMMUNITY",
     "author": "Previo Prakasa (github.com/previoip)",
-    "version": (1, 0, 1),
+    "version": (0, 0, 1),
     "location": "View3D > Properties > Render",
     "description": "Render toolkit using camera manipulation for generating 2D sprite sheet from 3D assets.",
     "warning": "This is an experimental project and should not be used in any form of production (as of today).",
@@ -36,21 +36,13 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         default=''
         )
 
-    enable_post_processing: BoolProperty(
+    bool_post_processing: BoolProperty(
         name='Use internal mask post processing',
         description = 'Use external script to process mask-map and colliders',
         )
 
-    int_frame_skip: IntProperty(
-        name='Frame-skip', 
-        description = 'Skips frame if jump number of frames for rendering (used to check render result)',
-        default=10, 
-        min=1, 
-        max=1000
-        )
-
-    enable_frame_skip: BoolProperty(
-        name='Enable Frame-skip',
+    bool_existing_camera: BoolProperty(
+        name='Use Existing Camera',
         description = 'Use frame skipping for rendering animated object',
         )
 
@@ -62,6 +54,19 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
             ("PERSP", "Perspective", "", 2),
         ],
         default="ORTHO"
+        )
+
+    bool_frame_skip: BoolProperty(
+        name='Enable Frame-skip',
+        description = 'Use frame skipping for rendering animated object',
+        )
+
+    int_frame_skip: IntProperty(
+        name='Frame-skip', 
+        description = 'Skips frame if jump number of frames for rendering (used to check render result)',
+        default=10, 
+        min=1, 
+        max=1000
         )
 
     float_camera_inclination: FloatProperty(
@@ -82,7 +87,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         max=36
         )
 
-    float_angle_offset: FloatProperty(
+    float_azimuth_offset: FloatProperty(
         name='Offset Angle', 
         description = 'Camera angle offset to target reference',
         default=0, 
@@ -92,6 +97,12 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         subtype='ANGLE'
         )
 
+    bool_auto_camera_offset: BoolProperty(
+        name='Auto Offset', 
+        description = 'Automatically set distance by object bounding-box size',
+        default=False, 
+        )
+
     float_distance_offset: FloatProperty(
         name='Offset Distance', 
         description = 'Camera distance offset to target reference',
@@ -99,14 +110,8 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         default=20, 
         max=1000
         )
-        
-    enable_auto_camera_offset: BoolProperty(
-        name='Auto Offset', 
-        description = 'Automatically set distance by object bounding-box size',
-        default=False, 
-        )
 
-    enable_auto_camera_scale: BoolProperty(
+    bool_auto_camera_scale: BoolProperty(
         name='Auto Camera Scale', 
         description = 'Automatically set camera scale by object bounding-box size',
         default=False, 
@@ -133,9 +138,34 @@ class SPRSHTT_PT_render_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        col = layout.column()
-        row = col.row()
-        row.prop(context.scene.sprshtt_properties, 'str_export_folder')  
+        addon_prop = context.scene.sprshtt_properties
+
+        box = layout.box()
+        box.label(text="Preferences")
+        col = box.column()
+        col.prop(addon_prop, 'str_export_folder')
+        col.prop(addon_prop, 'str_file_suffix')
+        col.prop(addon_prop, 'bool_post_processing')
+
+        box = layout.box()
+        box.label(text="Camera Properties")
+        col = box.column()
+        col.prop(addon_prop, 'bool_existing_camera')
+        col.prop(addon_prop, 'enum_camera_type')
+        col.prop(addon_prop, 'float_camera_inclination')
+        col.prop(addon_prop, 'float_azimuth_offset')
+        col.prop(addon_prop, 'bool_auto_camera_offset')
+        col.prop(addon_prop, 'float_distance_offset')
+        col.prop(addon_prop, 'bool_auto_camera_scale')
+
+
+        box = layout.box()
+        box.label(text="Renderer Properties")
+        col = box.column()
+        col.prop(addon_prop, 'int_render_increment')
+        col.prop(addon_prop, 'bool_frame_skip')
+        col.prop(addon_prop, 'int_frame_skip')
+
 
 classes = (SPRSHTT_PT_render_panel, SPRSHTT_PropertyGroup)
 
