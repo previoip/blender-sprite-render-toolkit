@@ -21,12 +21,13 @@ from bpy.props import (
     EnumProperty,
     PointerProperty
 )
+from math import pi
 
 class SPRSHTT_PropertyGroup(PropertyGroup):
 
     str_export_folder: StringProperty(
         name='Export Folder', 
-        description = 'Export subfolder name',
+        description = 'Export subfolder',
         default='/export'
         )
 
@@ -38,12 +39,12 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
 
     bool_post_processing: BoolProperty(
         name='Use internal mask post processing',
-        description = 'Use external script to process mask-map and colliders',
+        description = 'Use external script to process mask-map and colliders (requires PIL)',
         )
 
     bool_existing_camera: BoolProperty(
         name='Use Existing Camera',
-        description = 'Use frame skipping for rendering animated object',
+        description = 'Use existing camera instead of generated from these settings',
         )
 
     enum_camera_type: EnumProperty(
@@ -69,12 +70,22 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         max=1000
         )
 
-    float_camera_inclination: FloatProperty(
+    float_camera_inclination_offset: FloatProperty(
         name='Camera Inclination', 
         description = 'Camera inclination to the normal plane of target object.',
-        default=57.3, 
-        min=-360, 
-        max=360, 
+        default=57.3*pi/180, 
+        min=-pi, 
+        max=pi, 
+        precision=2,
+        subtype='ANGLE'
+        )
+
+    float_camera_azimuth_offset: FloatProperty(
+        name='Offset Angle', 
+        description = 'Camera angle offset to target reference',
+        default=0, 
+        min=-pi,
+        max=pi,
         precision=2,
         subtype='ANGLE'
         )
@@ -85,16 +96,6 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         default=8, 
         min=1, 
         max=36
-        )
-
-    float_azimuth_offset: FloatProperty(
-        name='Offset Angle', 
-        description = 'Camera angle offset to target reference',
-        default=0, 
-        min=-360, 
-        max=360, 
-        precision=2,
-        subtype='ANGLE'
         )
 
     bool_auto_camera_offset: BoolProperty(
@@ -120,16 +121,46 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     range_camera_movement_rotation: FloatProperty(
         name='Pivot Angle', 
         description = 'Adjust camera initial position',
-        default=45, 
-        min=-180, 
-        max=180, 
+        default=pi/4, 
+        min=-pi, 
+        max=pi, 
         precision=2,
         subtype='ANGLE'
         )
 
+    range_camera_movement_rotation: FloatProperty(
+        name='Pivot Angle', 
+        description = 'Adjust camera initial position',
+        default=45, 
+        min=-pi, 
+        max=pi, 
+        precision=2,
+        subtype='ANGLE'
+        )
+
+    fvec_target_object_pos_offset: FloatVectorProperty(
+        name='Target Position Offset', 
+        description='Camera target offset relative to center of mass of target/selected object', 
+        default=(0.0, 0.0, 0.0),  
+        unit='LENGTH'
+        )
+
+
+    fvec_target_object_rot_offset: FloatVectorProperty(
+        name='Tilt Offset', 
+        description='Camera target tilt relative to normal up-direction of target/selected object', 
+        default=(0.0, 0.0, 0.0), 
+        unit='ROTATION'
+        )
+
+    collection_target_object: PointerProperty(
+        type=bpy.types.Object, 
+        poll=lambda s, x: x.type == 'MESH',
+        name='Object'
+        )
 
 class SPRSHTT_PT_render_panel(bpy.types.Panel):
-    bl_label        = 'Sprite Sheet Toolkit'
+    bl_label        = '< Sprite Sheet Toolkit >'
     bl_idname       = 'SCENE_PT_layout'
     bl_space_type   = 'PROPERTIES'
     bl_region_type  = 'WINDOW'
@@ -139,6 +170,7 @@ class SPRSHTT_PT_render_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         addon_prop = context.scene.sprshtt_properties
+        scene = context.scene
 
         box = layout.box()
         box.label(text="Preferences")
@@ -148,12 +180,19 @@ class SPRSHTT_PT_render_panel(bpy.types.Panel):
         col.prop(addon_prop, 'bool_post_processing')
 
         box = layout.box()
+        box.label(text="Target Object Properties")
+        col = box.column()
+        col.prop(addon_prop, 'collection_target_object' )
+        col.prop(addon_prop, 'fvec_target_object_pos_offset' )
+        col.prop(addon_prop, 'fvec_target_object_rot_offset' )
+
+        box = layout.box()
         box.label(text="Camera Properties")
         col = box.column()
         col.prop(addon_prop, 'bool_existing_camera')
         col.prop(addon_prop, 'enum_camera_type')
-        col.prop(addon_prop, 'float_camera_inclination')
-        col.prop(addon_prop, 'float_azimuth_offset')
+        col.prop(addon_prop, 'float_camera_inclination_offset')
+        col.prop(addon_prop, 'float_camera_azimuth_offset')
         col.prop(addon_prop, 'bool_auto_camera_offset')
         col.prop(addon_prop, 'float_distance_offset')
         col.prop(addon_prop, 'bool_auto_camera_scale')
