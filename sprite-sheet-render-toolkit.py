@@ -138,7 +138,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         subtype='ANGLE'
         )
 
-    fvec_target_object_pos_offset: FloatVectorProperty(
+    fvec_camera_target_pos_offset: FloatVectorProperty(
         name='Target Position Offset', 
         description='Camera target offset relative to center of mass of target/selected object', 
         default=(0.0, 0.0, 0.0),  
@@ -146,25 +146,32 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         )
 
 
-    fvec_target_object_rot_offset: FloatVectorProperty(
+    fvec_camera_target_rot_offset: FloatVectorProperty(
         name='Tilt Offset', 
         description='Camera target tilt relative to normal up-direction of target/selected object', 
         default=(0.0, 0.0, 0.0), 
         unit='ROTATION'
         )
 
-    collection_target_object: PointerProperty(
+    collection_target_objects: PointerProperty(
         type=bpy.types.Object, 
         poll=lambda s, x: x.type == 'MESH',
         name='Object'
         )
 
-class SPRSHTT_PT_render_panel(bpy.types.Panel):
-    bl_label        = '< Sprite Sheet Toolkit >'
-    bl_idname       = 'SCENE_PT_layout'
+    collection_target_cameras: PointerProperty(
+        type=bpy.types.Object, 
+        poll=lambda s, x: x.type == 'CAMERA',
+        name='Camera'
+        )
+
+class SPRSHTT_Panel_baseProps:
     bl_space_type   = 'PROPERTIES'
     bl_region_type  = 'WINDOW'
     bl_context      = 'render'
+
+class SPRSHTT_PT_render_panel(SPRSHTT_Panel_baseProps, bpy.types.Panel):
+    bl_label        = '< Sprite Sheet Toolkit >'
     bl_options      = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
@@ -172,41 +179,70 @@ class SPRSHTT_PT_render_panel(bpy.types.Panel):
         addon_prop = context.scene.sprshtt_properties
         scene = context.scene
 
-        box = layout.box()
-        box.label(text="Preferences")
-        col = box.column()
+class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
+    bl_label = "Addon Settings"
+    bl_parent_id = "SPRSHTT_PT_render_panel"
+
+    def draw(self, context):
+        layout = self.layout
+        addon_prop = context.scene.sprshtt_properties
+        scene = context.scene
+
+        col = layout.column()
+        col.prop(addon_prop, 'collection_target_objects' )
+        col.prop(addon_prop, 'bool_existing_camera')
+        ## ColGroup 1
+        subcol = col.column()
+        subcol.prop(addon_prop, 'collection_target_cameras')
+        subcol.enabled = addon_prop.bool_existing_camera 
+        ## ColGroup 2
+        subcol = col.column()
+        subcol.enabled = not addon_prop.bool_existing_camera
+        subcol.prop(addon_prop, 'enum_camera_type')
+        subcol.prop(addon_prop, 'float_camera_inclination_offset')
+        subcol.prop(addon_prop, 'float_camera_azimuth_offset')
+        subcol.prop(addon_prop, 'bool_auto_camera_offset')
+        subcol.prop(addon_prop, 'float_distance_offset')
+        col.prop(addon_prop, 'fvec_camera_target_pos_offset' )
+        col.prop(addon_prop, 'fvec_camera_target_rot_offset' )
+
+
+class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel):
+    bl_label = "Renderer Settings"
+    bl_parent_id = "SPRSHTT_PT_render_panel"
+
+    def draw(self, context):
+        layout = self.layout
+        addon_prop = context.scene.sprshtt_properties
+        scene = context.scene
+        col = layout.column()
+        col.prop(addon_prop, 'int_render_increment')
+        col.prop(addon_prop, 'bool_frame_skip')
+        subcol = col.column()
+        subcol.enabled = addon_prop.bool_frame_skip
+        subcol.prop(addon_prop, 'int_frame_skip')
+
+class SPRSHTT_PT_render_panel_output(SPRSHTT_Panel_baseProps, bpy.types.Panel):
+    bl_label = "Output Preference"
+    bl_parent_id = "SPRSHTT_PT_render_panel"
+
+    def draw(self, context):
+        layout = self.layout
+        addon_prop = context.scene.sprshtt_properties
+        scene = context.scene
+
+        col = layout.column()
         col.prop(addon_prop, 'str_export_folder')
         col.prop(addon_prop, 'str_file_suffix')
         col.prop(addon_prop, 'bool_post_processing')
 
-        box = layout.box()
-        box.label(text="Target Object Properties")
-        col = box.column()
-        col.prop(addon_prop, 'collection_target_object' )
-        col.prop(addon_prop, 'fvec_target_object_pos_offset' )
-        col.prop(addon_prop, 'fvec_target_object_rot_offset' )
-
-        box = layout.box()
-        box.label(text="Camera Properties")
-        col = box.column()
-        col.prop(addon_prop, 'bool_existing_camera')
-        col.prop(addon_prop, 'enum_camera_type')
-        col.prop(addon_prop, 'float_camera_inclination_offset')
-        col.prop(addon_prop, 'float_camera_azimuth_offset')
-        col.prop(addon_prop, 'bool_auto_camera_offset')
-        col.prop(addon_prop, 'float_distance_offset')
-        col.prop(addon_prop, 'bool_auto_camera_scale')
-
-
-        box = layout.box()
-        box.label(text="Renderer Properties")
-        col = box.column()
-        col.prop(addon_prop, 'int_render_increment')
-        col.prop(addon_prop, 'bool_frame_skip')
-        col.prop(addon_prop, 'int_frame_skip')
-
-
-classes = (SPRSHTT_PT_render_panel, SPRSHTT_PropertyGroup)
+classes = (
+    SPRSHTT_PT_render_panel,
+    SPRSHTT_PT_render_panel_addon,
+    SPRSHTT_PT_render_panel_renderer,
+    SPRSHTT_PT_render_panel_output, 
+    SPRSHTT_PropertyGroup,
+)
 
 def register():
     for cl in classes:
