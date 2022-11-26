@@ -12,8 +12,10 @@ bl_info = {
 
 import bpy
 import os
+from random import getrandbits
 from bpy.types import (
     PropertyGroup,
+    Operator,
     Object as BObject
 )
 from bpy.props import (
@@ -31,7 +33,15 @@ from math import pi, sqrt
 
 # Addon Utils
 
-class utils:
+class Utils:
+
+    addon_object_default_prefix = 'sprshtt_addon_object_'
+
+    @ staticmethod
+    def sGetDefaultPrefix(mid:str = '') -> str:
+        if mid:
+            return Utils.addon_object_default_prefix + mid + '_'
+        return str(Utils.addon_object_default_prefix)
 
     @staticmethod
     def bBObjectsHasPrefix(prefix: str) -> bool:
@@ -47,24 +57,63 @@ class utils:
         ls = []
         for item in bpy.data.objects.keys():
             if item.startswith(prefix):
-                ls.append(item)
+                ls.append(bpy.data.objects[item])
         return ls
 
     @staticmethod
     def deleteObjectsFromScene(objs: list):
         """ Deletes objects data from scene context """
+        for obj in objs:
+            bpy.data.objects.remove(obj, do_unlink=True) 
         scene_copy = bpy.context.copy()
         scene_copy['selected_objects'] = objs
         bpy.ops.object.delete(scene_copy)
 
+
     @staticmethod
-    def renderToPath(context, target_filepath, target_filename):
+    def renderToPath(context, target_filepath :str, target_filename: str):
         """ Renders scene onto designated path and filename """
         curr_filepath = str(context.scene.render.filepath)
         target_filepath = os.path.join(target_filepath, target_filename)
         context.scene.render.filepath = target_filepath
         bpy.ops.render.render(write_still=True)
         context.scene.render.filepath = curr_filepath
+
+    @staticmethod
+    def mkdir(path: str):
+        """ Creates new directory if said directory does not exist """
+        if not os.path.isdir(path):
+            os.mkdir(path)
+
+    @staticmethod
+    def sGenerateUniqueObjectName(mid: str = '') -> str:
+        """ Generates unique object name with predefined prefix """
+        while True:
+            name = Utils.sGetDefaultPrefix(mid)
+            name += '%08x' % getrandbits(32)
+            if not Utils.bBObjectsHasPrefix(name):
+                return name
+
+class ObjectUtils:
+
+    @staticmethod
+    def uCalcObjectBboxDimension(obj: BObject):
+        rot = obj.rotation_euler.copy()
+        dim = obj.dimensions.to_3d()
+        corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+        x, y, z = [ [ c[i] for c in corners ] for i in range(3) ]
+        fcenter = lambda x: ( max(x) + min(x) ) / 2
+        center = [ fcenter(axis) for axis in [x,y,z] ]
+        return Vector(center), dim, rot
+
+    @staticmethod
+    def uMoveObjectOnZNormal(obj: BObject, dest: float = 0.0, axis=(0,0,1)):
+        axis = Vector(axis)
+        dest = axis * dest
+        mat_inv = obj.matrix_world.copy()
+        mat_inv.invert()
+        obj.location += dest @ mat_inv
+        return obj
 
 
 # Addon Properties
@@ -202,7 +251,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     collection_target_objects: PointerProperty(
         type=bpy.types.Object, 
         poll=lambda s, x: x.type == 'MESH',
-        name='Object'
+        name='Target'
         )
 
     collection_target_cameras: PointerProperty(
@@ -210,6 +259,47 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         poll=lambda s, x: x.type == 'CAMERA',
         name='Camera'
         )
+    
+    # ????
+    private_str_target_obj_name: StringProperty()
+    private_float_target_obj_dimension: FloatVectorProperty()
+
+# Addon Operators
+
+class SPRSHTT_Opr_CreateHelperObject(Operator):
+    bl_idname = "object.sprshtt_create_helper_object"
+    bl_label = "Create Helper Object on Target Object"
+
+    def execute(self, context):
+        scene = context.scene
+        addon_prop = scene.sprshtt_properties
+
+        coord = Vector((0,0,0))
+        rot = Euler((0,0,0))
+        dim = Vector((0,0,2))
+        offset = 0
+        target_object = addon_prop.collection_target_objects
+
+        if not target_object:
+            return {'FINISHED'}
+
+        coord, dim, rot = ObjectUtils.uCalcObjectBboxDimension(target_object)
+
+        Utils.deleteObjectsFromScene(Utils.qAllBObjectsWithPrefix(Utils.sGetDefaultPrefix()))
+
+        bpy.ops.object.empty_add(type='SINGLE_ARROW', radius=max(dim), location=coord, rotation=rot)
+        obj = bpy.context.selected_objects[0]
+        ObjectUtils.uMoveObjectOnZNormal(obj, offset)
+        obj.name = Utils.sGenerateUniqueObjectName('axis-helper')
+        obj.empty_display_size = abs(dim.z)
+        if abs(dim.z) <= 1:
+            obj.empty_display_size = 1
+        bpy.ops.object.select_all(action='DESELECT')
+        if target_object:
+            target_object.select_set(True)
+            addon_prop.private_str_target_obj_name = target_object.name
+        addon_prop.private_float_target_obj_dimension = dim
+        return {'FINISHED'}
 
 # Addon UIs
 
@@ -236,11 +326,15 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
 
         col = layout.column()
         col.prop(addon_prop, 'collection_target_objects' )
+        ## ColGroup 0
+        subcol = col.column()
+        subcol.enabled = bool(addon_prop.collection_target_objects) 
+        subcol.operator('object.sprshtt_create_helper_object', text='Spawn Target Helper')
         col.prop(addon_prop, 'bool_existing_camera')
         ## ColGroup 1
         subcol = col.column()
-        subcol.prop(addon_prop, 'collection_target_cameras')
         subcol.enabled = addon_prop.bool_existing_camera 
+        subcol.prop(addon_prop, 'collection_target_cameras')
         ## ColGroup 2
         subcol = col.column()
         subcol.enabled = not addon_prop.bool_existing_camera
@@ -249,8 +343,8 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subcol.prop(addon_prop, 'float_camera_azimuth_offset')
         subcol.prop(addon_prop, 'bool_auto_camera_offset')
         subcol.prop(addon_prop, 'float_distance_offset')
-        col.prop(addon_prop, 'fvec_camera_target_pos_offset' )
-        col.prop(addon_prop, 'fvec_camera_target_rot_offset' )
+        subcol.prop(addon_prop, 'fvec_camera_target_pos_offset' )
+        subcol.prop(addon_prop, 'fvec_camera_target_rot_offset' )
 
 
 class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel):
@@ -282,13 +376,14 @@ class SPRSHTT_PT_render_panel_output(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         col.prop(addon_prop, 'str_file_suffix')
         col.prop(addon_prop, 'bool_post_processing')
 
-# Addon Register/Unregister 
+# Addon Register/Unregister
 
 classes = (
     SPRSHTT_PT_render_panel,
     SPRSHTT_PT_render_panel_addon,
     SPRSHTT_PT_render_panel_renderer,
     SPRSHTT_PT_render_panel_output, 
+    SPRSHTT_Opr_CreateHelperObject,
     SPRSHTT_PropertyGroup,
 )
 
