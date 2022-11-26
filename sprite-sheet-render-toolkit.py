@@ -31,13 +31,15 @@ from mathutils import Vector, Matrix, Euler
 from math import pi, sqrt
 
 
+
 # Addon Utils
 
 class Utils:
 
-    addon_object_default_prefix = 'sprshtt_addon_object_'
+    # this string configuration ensures object always stays on the bottom of object list on the outliner (assuming ascending sort)
+    addon_object_default_prefix = '||sprshtt_addon_object_' 
 
-    @ staticmethod
+    @staticmethod
     def sGetDefaultPrefix(mid:str = '') -> str:
         if mid:
             return Utils.addon_object_default_prefix + mid + '_'
@@ -63,11 +65,12 @@ class Utils:
     @staticmethod
     def deleteObjectsFromScene(objs: list):
         """ Deletes objects data from scene context """
-        for obj in objs:
-            bpy.data.objects.remove(obj, do_unlink=True) 
-        scene_copy = bpy.context.copy()
-        scene_copy['selected_objects'] = objs
-        bpy.ops.object.delete(scene_copy)
+        if objs:
+            for obj in objs:
+                bpy.data.objects.remove(obj, do_unlink=True) 
+            # scene_copy = bpy.context.copy()
+            # scene_copy['selected_objects'] = objs
+            # bpy.ops.object.delete(scene_copy)
 
 
     @staticmethod
@@ -94,6 +97,12 @@ class Utils:
             if not Utils.bBObjectsHasPrefix(name):
                 return name
 
+    @staticmethod
+    def assertObjectMode(context):
+        if context.active_object and not context.active_object.mode == 'OBJECT':
+            print('WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
+            bpy.ops.object.mode_set(mode='OBJECT')
+
 class ObjectUtils:
 
     @staticmethod
@@ -107,13 +116,14 @@ class ObjectUtils:
         return Vector(center), dim, rot
 
     @staticmethod
-    def uMoveObjectOnZNormal(obj: BObject, dest: float = 0.0, axis=(0,0,1)):
+    def uMoveObjectAlongAxis(obj: BObject, dest: float = 0.0, axis=(0,0,1)):
         axis = Vector(axis)
         dest = axis * dest
         mat_inv = obj.matrix_world.copy()
         mat_inv.invert()
         obj.location += dest @ mat_inv
         return obj
+
 
 
 # Addon Properties
@@ -264,6 +274,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     private_str_target_obj_name: StringProperty()
     private_float_target_obj_dimension: FloatVectorProperty()
 
+
 # Addon Operators
 
 class SPRSHTT_Opr_CreateHelperObject(Operator):
@@ -274,32 +285,44 @@ class SPRSHTT_Opr_CreateHelperObject(Operator):
         scene = context.scene
         addon_prop = scene.sprshtt_properties
 
-        coord = Vector((0,0,0))
-        rot = Euler((0,0,0))
-        dim = Vector((0,0,2))
-        offset = 0
         target_object = addon_prop.collection_target_objects
-
         if not target_object:
-            return {'FINISHED'}
+            return {'CANCELLED'}
+
+        Utils.assertObjectMode(context)
 
         coord, dim, rot = ObjectUtils.uCalcObjectBboxDimension(target_object)
+        # coord : Vector
+        # rot   : Euler
+        # dim   : Vector
 
         Utils.deleteObjectsFromScene(Utils.qAllBObjectsWithPrefix(Utils.sGetDefaultPrefix()))
 
-        bpy.ops.object.empty_add(type='SINGLE_ARROW', radius=max(dim), location=coord, rotation=rot)
+        bpy.ops.object.empty_add(type='SINGLE_ARROW', radius=dim.length, location=coord, rotation=rot)
         obj = bpy.context.selected_objects[0]
-        ObjectUtils.uMoveObjectOnZNormal(obj, offset)
-        obj.name = Utils.sGenerateUniqueObjectName('axis-helper')
-        obj.empty_display_size = abs(dim.z)
+        obj.name = Utils.sGenerateUniqueObjectName('axis-helper-arrow')
+        obj.empty_display_size = dim.length
         if abs(dim.z) <= 1:
             obj.empty_display_size = 1
+
+        rot.rotate_axis('X', pi/2)
+
+        bpy.ops.object.empty_add(type='CIRCLE', radius=dim.length, location=coord, rotation=rot)
+        obj = bpy.context.selected_objects[0]
+        obj.name = Utils.sGenerateUniqueObjectName('axis-helper-circle')
+        obj.empty_display_size = dim.length
+        if abs(dim.z) <= 1:
+            obj.empty_display_size = 1
+
         bpy.ops.object.select_all(action='DESELECT')
+
         if target_object:
             target_object.select_set(True)
             addon_prop.private_str_target_obj_name = target_object.name
         addon_prop.private_float_target_obj_dimension = dim
+
         return {'FINISHED'}
+
 
 # Addon UIs
 
@@ -375,6 +398,7 @@ class SPRSHTT_PT_render_panel_output(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         col.prop(addon_prop, 'str_export_folder')
         col.prop(addon_prop, 'str_file_suffix')
         col.prop(addon_prop, 'bool_post_processing')
+
 
 # Addon Register/Unregister
 
