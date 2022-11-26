@@ -11,7 +11,11 @@ bl_info = {
 }
 
 import bpy
-from bpy.types import PropertyGroup
+import os
+from bpy.types import (
+    PropertyGroup,
+    Object as BObject
+)
 from bpy.props import (
     BoolProperty,
     IntProperty,
@@ -21,7 +25,49 @@ from bpy.props import (
     EnumProperty,
     PointerProperty
 )
-from math import pi
+from mathutils import Vector, Matrix, Euler
+from math import pi, sqrt
+
+
+# Addon Utils
+
+class utils:
+
+    @staticmethod
+    def bBObjectsHasPrefix(prefix: str) -> bool:
+        """ Checks if blender data.objects has object with prefix """
+        for item in bpy.data.objects.keys():
+            if item.startswith(prefix):
+                return True
+        return False    
+
+    @staticmethod
+    def qAllBObjectsWithPrefix(prefix: str) -> list:
+        """ Queries and returns all object that has prefix """
+        ls = []
+        for item in bpy.data.objects.keys():
+            if item.startswith(prefix):
+                ls.append(item)
+        return ls
+
+    @staticmethod
+    def deleteObjectsFromScene(objs: list):
+        """ Deletes objects data from scene context """
+        scene_copy = bpy.context.copy()
+        scene_copy['selected_objects'] = objs
+        bpy.ops.object.delete(scene_copy)
+
+    @staticmethod
+    def renderToPath(context, target_filepath, target_filename):
+        """ Renders scene onto designated path and filename """
+        curr_filepath = str(context.scene.render.filepath)
+        target_filepath = os.path.join(target_filepath, target_filename)
+        context.scene.render.filepath = target_filepath
+        bpy.ops.render.render(write_still=True)
+        context.scene.render.filepath = curr_filepath
+
+
+# Addon Properties
 
 class SPRSHTT_PropertyGroup(PropertyGroup):
 
@@ -48,7 +94,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         )
 
     enum_camera_type: EnumProperty(
-        name='Camera Type', 
+        name='Type', 
         description = 'Change default camera type',
         items = [
             ("ORTHO", "Orthographic", "", 1),
@@ -165,6 +211,8 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         name='Camera'
         )
 
+# Addon UIs
+
 class SPRSHTT_Panel_baseProps:
     bl_space_type   = 'PROPERTIES'
     bl_region_type  = 'WINDOW'
@@ -175,9 +223,7 @@ class SPRSHTT_PT_render_panel(SPRSHTT_Panel_baseProps, bpy.types.Panel):
     bl_options      = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
-        layout = self.layout
-        addon_prop = context.scene.sprshtt_properties
-        scene = context.scene
+        pass
 
 class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
     bl_label = "Addon Settings"
@@ -235,6 +281,8 @@ class SPRSHTT_PT_render_panel_output(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         col.prop(addon_prop, 'str_export_folder')
         col.prop(addon_prop, 'str_file_suffix')
         col.prop(addon_prop, 'bool_post_processing')
+
+# Addon Register/Unregister 
 
 classes = (
     SPRSHTT_PT_render_panel,
