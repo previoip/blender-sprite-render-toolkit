@@ -28,7 +28,7 @@ from bpy.props import (
     PointerProperty
 )
 from mathutils import Vector, Matrix, Euler
-from math import pi, sqrt
+from math import pi, sqrt, log2
 
 
 
@@ -36,14 +36,38 @@ from math import pi, sqrt
 
 class Utils:
 
+    @staticmethod
+    def renderToPath(context, target_filepath :str, target_filename: str):
+        """ Renders scene onto designated path and filename """
+        curr_filepath = str(context.scene.render.filepath)
+        target_filepath = os.path.join(target_filepath, target_filename)
+        context.scene.render.filepath = target_filepath
+        bpy.ops.render.render(write_still=True)
+        context.scene.render.filepath = curr_filepath
+
+    @staticmethod
+    def mkdir(path: str):
+        """ Creates new directory if said directory does not exist """
+        if not os.path.isdir(path):
+            os.mkdir(path)
+
+    @staticmethod
+    def assertObjectMode(context):
+        if context.active_object and not context.active_object.mode == 'OBJECT':
+            print('WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+
+class ObjectUtils:
+
     # this string configuration ensures object always stays on the bottom of object list on the outliner (assuming ascending sort)
     addon_object_default_prefix = '||sprshtt_addon_object_' 
 
     @staticmethod
     def sGetDefaultPrefix(mid:str = '') -> str:
         if mid:
-            return Utils.addon_object_default_prefix + mid + '_'
-        return str(Utils.addon_object_default_prefix)
+            return ObjectUtils.addon_object_default_prefix + mid + '_'
+        return str(ObjectUtils.addon_object_default_prefix)
 
     @staticmethod
     def bBObjectsHasPrefix(prefix: str) -> bool:
@@ -72,38 +96,14 @@ class Utils:
             # scene_copy['selected_objects'] = objs
             # bpy.ops.object.delete(scene_copy)
 
-
-    @staticmethod
-    def renderToPath(context, target_filepath :str, target_filename: str):
-        """ Renders scene onto designated path and filename """
-        curr_filepath = str(context.scene.render.filepath)
-        target_filepath = os.path.join(target_filepath, target_filename)
-        context.scene.render.filepath = target_filepath
-        bpy.ops.render.render(write_still=True)
-        context.scene.render.filepath = curr_filepath
-
-    @staticmethod
-    def mkdir(path: str):
-        """ Creates new directory if said directory does not exist """
-        if not os.path.isdir(path):
-            os.mkdir(path)
-
     @staticmethod
     def sGenerateUniqueObjectName(mid: str = '') -> str:
         """ Generates unique object name with predefined prefix """
         while True:
-            name = Utils.sGetDefaultPrefix(mid)
+            name = ObjectUtils.sGetDefaultPrefix(mid)
             name += '%08x' % getrandbits(32)
-            if not Utils.bBObjectsHasPrefix(name):
+            if not ObjectUtils.bBObjectsHasPrefix(name):
                 return name
-
-    @staticmethod
-    def assertObjectMode(context):
-        if context.active_object and not context.active_object.mode == 'OBJECT':
-            print('WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
-            bpy.ops.object.mode_set(mode='OBJECT')
-
-class ObjectUtils:
 
     @staticmethod
     def uCalcObjectBboxDimension(obj: BObject):
@@ -150,6 +150,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     bool_existing_camera: BoolProperty(
         name='Use Existing Camera',
         description = 'Use existing camera instead of generated from these settings',
+        default=False,
         )
 
     enum_camera_type: EnumProperty(
@@ -186,7 +187,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         )
 
     float_camera_azimuth_offset: FloatProperty(
-        name='Offset Angle', 
+        name='Camera Azimuth', 
         description = 'Camera angle offset to target reference',
         default=0, 
         min=-pi,
@@ -220,7 +221,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     bool_auto_camera_scale: BoolProperty(
         name='Auto Camera Scale', 
         description = 'Automatically set camera scale by object bounding-box size',
-        default=False, 
+        default=False,
         )
 
     range_camera_movement_rotation: FloatProperty(
@@ -296,23 +297,22 @@ class SPRSHTT_Opr_CreateHelperObject(Operator):
         # rot   : Euler
         # dim   : Vector
 
-        Utils.deleteObjectsFromScene(Utils.qAllBObjectsWithPrefix(Utils.sGetDefaultPrefix()))
+        ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix()))
 
         bpy.ops.object.empty_add(type='SINGLE_ARROW', radius=dim.length, location=coord, rotation=rot)
         obj = bpy.context.selected_objects[0]
-        obj.name = Utils.sGenerateUniqueObjectName('axis-helper-arrow')
+        obj.name = ObjectUtils.sGenerateUniqueObjectName('axis-helper-arrow')
         obj.empty_display_size = dim.length
-        if abs(dim.z) <= 1:
-            obj.empty_display_size = 1
+        if abs(dim.z) <= 1: obj.empty_display_size = 1
 
         rot.rotate_axis('X', pi/2)
 
         bpy.ops.object.empty_add(type='CIRCLE', radius=dim.length, location=coord, rotation=rot)
         obj = bpy.context.selected_objects[0]
-        obj.name = Utils.sGenerateUniqueObjectName('axis-helper-circle')
+        obj.name = ObjectUtils.sGenerateUniqueObjectName('axis-helper-circle')
         obj.empty_display_size = dim.length
-        if abs(dim.z) <= 1:
-            obj.empty_display_size = 1
+        obj.show_axis = True
+        if abs(dim.z) <= 1: obj.empty_display_size = 1
 
         bpy.ops.object.select_all(action='DESELECT')
 
@@ -320,6 +320,65 @@ class SPRSHTT_Opr_CreateHelperObject(Operator):
             target_object.select_set(True)
             addon_prop.private_str_target_obj_name = target_object.name
         addon_prop.private_float_target_obj_dimension = dim
+
+        return {'FINISHED'}
+
+class SPRSHTT_Opr_CreateCamera(Operator):
+    """ Create custom camera """
+    bl_idname = 'object.sprshtt_create_camera'
+    bl_label = "Create Custom Camera"
+
+    def execute(self, context):
+        scene = context.scene
+        addon_prop = scene.sprshtt_properties
+        objects = scene.objects
+        ops_object = bpy.ops.object # cursed bypass
+        target_object = addon_prop.collection_target_objects
+
+        is_helper_already_exist = False
+        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
+            ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
+            is_helper_already_exist = True
+        else:
+            ops_object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
+
+        if not target_object:
+            return {'CANCELLED'}
+
+        if addon_prop.bool_existing_camera:
+            context.scene.camera = ObjectUtils.qAllBObjectsWithPrefix('Camera')[0]
+            return {'FINISHED'}
+
+        # program begins
+        ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera')))
+        helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
+
+        camera_inclination = addon_prop.float_camera_inclination_offset
+        camera_azimuth = addon_prop.float_camera_azimuth_offset
+        camera_offset = addon_prop.float_distance_offset
+
+        if addon_prop.bool_auto_camera_offset:
+            _, dim, _  = ObjectUtils.uCalcObjectBboxDimension(helper_object)
+            camera_offset = helper_object.empty_display_size + log2(helper_object.empty_display_size + 1) * 8
+
+        loc, _, rot = ObjectUtils.uCalcObjectBboxDimension(helper_object)
+
+        bpy.ops.object.camera_add(location=loc, rotation=rot)
+
+        obj = context.selected_objects[0]
+        obj.name = ObjectUtils.sGenerateUniqueObjectName('camera')
+        obj.data.type = addon_prop.enum_camera_type
+        obj.data.show_sensor = True
+        obj.data.show_limits = True
+        ObjectUtils.uMoveObjectAlongAxis(obj, camera_offset, axis=(0,-1,0))
+        obj.rotation_euler.rotate_axis('X', pi/2)
+        context.scene.camera = obj
+
+
+        if not is_helper_already_exist:
+            # delete helper objects from recreation
+            for t in ['axis-helper-arrow', 'axis-helper-circle']:
+                ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t)))
 
         return {'FINISHED'}
 
@@ -408,6 +467,7 @@ classes = (
     SPRSHTT_PT_render_panel_renderer,
     SPRSHTT_PT_render_panel_output, 
     SPRSHTT_Opr_CreateHelperObject,
+    SPRSHTT_Opr_CreateCamera,
     SPRSHTT_PropertyGroup,
 )
 
