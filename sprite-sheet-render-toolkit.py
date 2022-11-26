@@ -151,6 +151,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         name='Use Existing Camera',
         description = 'Use existing camera instead of generated from these settings',
         default=False,
+        update=lambda a, b: ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera')))
         )
 
     enum_camera_type: EnumProperty(
@@ -278,7 +279,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
 
 # Addon Operators
 
-class SPRSHTT_Opr_CreateHelperObject(Operator):
+class SPRSHTT_OP_CreateHelperObject(Operator):
     bl_idname = "object.sprshtt_create_helper_object"
     bl_label = "Create Helper Object on Target Object"
 
@@ -323,7 +324,7 @@ class SPRSHTT_Opr_CreateHelperObject(Operator):
 
         return {'FINISHED'}
 
-class SPRSHTT_Opr_CreateCamera(Operator):
+class SPRSHTT_OP_CreateCamera(Operator):
     """ Create custom camera """
     bl_idname = 'object.sprshtt_create_camera'
     bl_label = "Create Custom Camera"
@@ -335,15 +336,15 @@ class SPRSHTT_Opr_CreateCamera(Operator):
         ops_object = bpy.ops.object # cursed bypass
         target_object = addon_prop.collection_target_objects
 
+        if not target_object:
+            return {'CANCELLED'}
+
         is_helper_already_exist = False
         if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
             ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
             is_helper_already_exist = True
         else:
             ops_object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
-
-        if not target_object:
-            return {'CANCELLED'}
 
         if addon_prop.bool_existing_camera:
             context.scene.camera = ObjectUtils.qAllBObjectsWithPrefix('Camera')[0]
@@ -382,6 +383,13 @@ class SPRSHTT_Opr_CreateCamera(Operator):
 
         return {'FINISHED'}
 
+class SPRSHTT_OP_DeleteAllAddonObjects(Operator):
+    bl_idname = 'object.sprshtt_delete_addon_objects'
+    bl_label = "Delete All SPRSHTT Addon Object"
+    def execute(self, context):
+        ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix()))
+        return {'FINISHED'}
+
 
 # Addon UIs
 
@@ -407,6 +415,7 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         scene = context.scene
 
         col = layout.column()
+        col.operator('object.sprshtt_delete_addon_objects', text='Delete Addon Objects')
         col.prop(addon_prop, 'collection_target_objects' )
         ## ColGroup 0
         subcol = col.column()
@@ -425,8 +434,9 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subcol.prop(addon_prop, 'float_camera_azimuth_offset')
         subcol.prop(addon_prop, 'bool_auto_camera_offset')
         subcol.prop(addon_prop, 'float_distance_offset')
-        subcol.prop(addon_prop, 'fvec_camera_target_pos_offset' )
-        subcol.prop(addon_prop, 'fvec_camera_target_rot_offset' )
+        subcol.prop(addon_prop, 'fvec_camera_target_pos_offset')
+        subcol.prop(addon_prop, 'fvec_camera_target_rot_offset')
+        subcol.operator('object.sprshtt_create_camera', text='Spawn Camera')
 
 
 class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel):
@@ -466,8 +476,9 @@ classes = (
     SPRSHTT_PT_render_panel_addon,
     SPRSHTT_PT_render_panel_renderer,
     SPRSHTT_PT_render_panel_output, 
-    SPRSHTT_Opr_CreateHelperObject,
-    SPRSHTT_Opr_CreateCamera,
+    SPRSHTT_OP_CreateHelperObject,
+    SPRSHTT_OP_CreateCamera,
+    SPRSHTT_OP_DeleteAllAddonObjects,
     SPRSHTT_PropertyGroup,
 )
 
