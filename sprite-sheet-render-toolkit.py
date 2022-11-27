@@ -375,6 +375,8 @@ class SPRSHTT_OP_CreateCamera(Operator):
         if not target_object:
             return {'CANCELLED'}
 
+        Utils.bAssertObjectMode(context)
+
         is_helper_already_exist = False
         if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
             ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
@@ -392,10 +394,10 @@ class SPRSHTT_OP_CreateCamera(Operator):
         camera_inclination = addon_prop.float_camera_inclination_offset
         camera_azimuth = addon_prop.float_camera_azimuth_offset
         camera_offset = addon_prop.float_distance_offset
-
+        _, target_dim, _  = ObjectUtils.uCalcObjectBboxDimension(target_object)
         if addon_prop.bool_auto_camera_offset:
             _, dim, _  = ObjectUtils.uCalcObjectBboxDimension(helper_object)
-            camera_offset = helper_object.empty_display_size + log2(helper_object.empty_display_size + 1) * 8
+            camera_offset = helper_object.empty_display_size + log2(target_dim.length + 1) * 8
 
         loc, _, rot = ObjectUtils.uCalcObjectBboxDimension(helper_object)
 
@@ -408,6 +410,8 @@ class SPRSHTT_OP_CreateCamera(Operator):
         obj.data.show_limits = True
         ObjectUtils.uMoveObjectAlongAxis(obj, (0,-1,0), camera_offset)
         obj.rotation_euler.rotate_axis('X', pi/2)
+        obj.data.clip_start = max(1e-4, camera_offset - target_dim.length * 1.5)
+        obj.data.clip_end = max(1e-4, camera_offset + target_dim.length * 1.5)
         context.scene.camera = obj
         addon_prop.collection_target_cameras = obj
 
