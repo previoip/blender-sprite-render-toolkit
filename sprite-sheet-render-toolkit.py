@@ -28,13 +28,14 @@ from bpy.props import (
     PointerProperty
 )
 from mathutils import Vector, Matrix, Euler
-from math import pi, sqrt, log2
+from math import pi, sqrt, log2, isclose
 
 
 
 # Addon Utils
 
 class Utils:
+    addon_previously_selected = None
 
     @staticmethod
     def renderToPath(context, target_filepath :str, target_filename: str):
@@ -52,14 +53,32 @@ class Utils:
             os.mkdir(path)
 
     @staticmethod
-    def assertObjectMode(context):
+    def bAssertObjectMode(context, strict=True):
         if context.active_object and not context.active_object.mode == 'OBJECT':
+            if not strict:
+                return False
             print(f'WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
             bpy.ops.object.mode_set(mode='OBJECT')
+            return True
+
+    @staticmethod
+    def saveSelectedObjectState(context):
+        if not Utils.bAssertObjectMode(context, strict=False):
+            return
+        Utils.addon_previously_selected = context.selected_objects
+
+    @staticmethod
+    def loadSelectedObjectState(context):
+        if not Utils.bAssertObjectMode(context, strict=False):
+            return
+        if Utils.addon_previously_selected:
+            for o in Utils.addon_previously_selected:
+                o.select_set(state=True)
+            context.view_layer.objects.active = Utils.addon_previously_selected[0]
+            Utils.addon_previously_selected = None
 
 
 class ObjectUtils:
-
     addon_object_default_prefix = '||sprshtt_addon_object_' 
 
     @staticmethod
@@ -87,13 +106,10 @@ class ObjectUtils:
 
     @staticmethod
     def deleteObjectsFromScene(objs: list):
-        """ Deletes objects data from scene context """
+        """ Deletes objects data from scene """
         if objs:
             for obj in objs:
                 bpy.data.objects.remove(obj, do_unlink=True) 
-            # scene_copy = bpy.context.copy()
-            # scene_copy['selected_objects'] = objs
-            # bpy.ops.object.delete(scene_copy)
     
     @staticmethod
     def deleteObjectsWithPrefix(prefix: str):
@@ -120,15 +136,35 @@ class ObjectUtils:
         return Vector(center), dim, rot
 
     @staticmethod
-    def uMoveObjectAlongAxis(obj: BObject, dest: float = 0.0, axis=(0,0,1)):
-        axis = Vector(axis)
-        dest = axis * dest
+    def uMoveObjectAlongAxis(obj: BObject, axis=(0,0,1), offset: float = 0.0,):
+        if not isinstance(axis, Vector):
+            axis = Vector(axis)
+        if isclose(offset, 0):
+            return obj
+        vec_offset = axis * offset
         mat_inv = obj.matrix_world.copy()
         mat_inv.invert()
-        obj.location += dest @ mat_inv
+        obj.location += vec_offset @ mat_inv
         return obj
 
-
+    def uPivotObjectAlongTargetLocalAxis(obj: BObject, pivot_obj: BObject, pivot_axis_enum, offset_angle: float):
+        if pivot_axis_enum not in ['X', 'Y', 'Z']:
+            return obj
+        if isclose(offset_angle, 0):
+            return obj
+        Utils.bAssertObjectMode(bpy.context, strict=True)
+        Utils.saveSelectedObjectState(bpy.context)
+        bpy.ops.object.select_all(action='DESELECT')
+        obj.select_set(state=True)
+        pivot_obj.select_set(state=True)
+        bpy.context.view_layer.objects.active = pivot_obj
+        bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
+        pivot_obj.rotation_euler.rotate_axis(pivot_axis_enum, offset_angle)
+        bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
+        bpy.ops.object.select_all(action='DESELECT')
+        pivot_obj.rotation_euler.rotate_axis(pivot_axis_enum, -offset_angle)
+        Utils.loadSelectedObjectState(bpy.context)
+        return obj
 
 # Addon Properties
 
@@ -201,7 +237,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         subtype='ANGLE'
         )
 
-    int_render_increment: IntProperty(
+    int_camera_rotation_increment: IntProperty(
         name='Increment', 
         description = 'Camera n of increment in one render cycle (rotates 360 degrees).',
         default=8, 
@@ -295,7 +331,7 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
         if not target_object:
             return {'CANCELLED'}
 
-        Utils.assertObjectMode(context)
+        Utils.bAssertObjectMode(context)
 
         coord, dim, rot = ObjectUtils.uCalcObjectBboxDimension(target_object)
 
@@ -370,13 +406,12 @@ class SPRSHTT_OP_CreateCamera(Operator):
         obj.data.type = addon_prop.enum_camera_type
         obj.data.show_sensor = True
         obj.data.show_limits = True
-        ObjectUtils.uMoveObjectAlongAxis(obj, camera_offset, axis=(0,-1,0))
+        ObjectUtils.uMoveObjectAlongAxis(obj, (0,-1,0), camera_offset)
         obj.rotation_euler.rotate_axis('X', pi/2)
-        # context.scene.camera = obj
+        context.scene.camera = obj
         addon_prop.collection_target_cameras = obj
 
         if not is_helper_already_exist:
-            # delete helper objects from recreation
             for t in ['axis-helper-arrow', 'axis-helper-circle']:
                 ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
 
@@ -388,6 +423,79 @@ class SPRSHTT_OP_DeleteAllAddonObjects(Operator):
     def execute(self, context):
         ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
         return {'FINISHED'}
+
+class SPRSHTT_OP_RotateCameraCW(Operator):
+    bl_idname = 'object.sprshtt_rotate_camera_cw'
+    bl_label = "Rotate Camera Clockwise"
+
+    def execute(self, context):
+        scene = context.scene
+        addon_prop = scene.sprshtt_properties
+        camera_object = addon_prop.collection_target_cameras
+
+        if not ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')):
+            return {'CANCELLED'}
+        helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
+
+        if not camera_object:
+            return {'CANCELLED'}
+
+        is_helper_already_exist = False
+        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
+            ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
+            is_helper_already_exist = True
+        else:
+            bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT')
+
+        angle_offset = 2*pi/addon_prop.int_camera_rotation_increment
+
+        if isclose(angle_offset, 2*pi):
+            return {'CANCELLED'}
+
+        ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle_offset)
+
+        if not is_helper_already_exist:
+            for t in ['axis-helper-arrow', 'axis-helper-circle']:
+                ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
+
+        return {'FINISHED'}
+
+class SPRSHTT_OP_RotateCameraCCW(Operator):
+    bl_idname = 'object.sprshtt_rotate_camera_ccw'
+    bl_label = "Rotate Camera Counter-Clockwise"
+    def execute(self, context):
+        scene = context.scene
+        addon_prop = scene.sprshtt_properties
+        camera_object = addon_prop.collection_target_cameras
+
+        if not ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')):
+            return {'CANCELLED'}
+        helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
+
+        if not camera_object:
+            return {'CANCELLED'}
+
+        is_helper_already_exist = False
+        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
+            ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
+            is_helper_already_exist = True
+        else:
+            bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
+
+        angle_offset = -2*pi/addon_prop.int_camera_rotation_increment
+
+        if isclose(angle_offset, -2*pi):
+            return {'CANCELLED'}
+
+        ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle_offset)
+
+        if not is_helper_already_exist:
+            # delete helper objects from recreation
+            for t in ['axis-helper-arrow', 'axis-helper-circle']:
+                ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
+
+        return {'FINISHED'}
+
 
 
 # Addon UIs
@@ -438,7 +546,12 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subcol.prop(addon_prop, 'fvec_camera_target_pos_offset')
         subcol.prop(addon_prop, 'fvec_camera_target_rot_offset')
         subcol.operator('object.sprshtt_create_camera', text='Spawn Camera')
-
+        ## ColGroup 3
+        subcol = col.column()
+        row = subcol.row()
+        row.enabled = bool(addon_prop.collection_target_cameras)
+        row.operator('object.sprshtt_rotate_camera_cw', text='CW')
+        row.operator('object.sprshtt_rotate_camera_ccw', text='CCW')
 
 class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel):
     bl_label = "Renderer Settings"
@@ -449,7 +562,7 @@ class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel)
         addon_prop = context.scene.sprshtt_properties
         scene = context.scene
         col = layout.column()
-        col.prop(addon_prop, 'int_render_increment')
+        col.prop(addon_prop, 'int_camera_rotation_increment')
         col.prop(addon_prop, 'bool_frame_skip')
         subcol = col.column()
         subcol.enabled = addon_prop.bool_frame_skip
@@ -480,6 +593,8 @@ classes = (
     SPRSHTT_OP_CreateHelperObject,
     SPRSHTT_OP_CreateCamera,
     SPRSHTT_OP_DeleteAllAddonObjects,
+    SPRSHTT_OP_RotateCameraCW,
+    SPRSHTT_OP_RotateCameraCCW,
     SPRSHTT_PropertyGroup,
 )
 
