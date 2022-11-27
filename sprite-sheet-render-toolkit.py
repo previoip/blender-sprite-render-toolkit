@@ -147,6 +147,7 @@ class ObjectUtils:
         obj.location += vec_offset @ mat_inv
         return obj
 
+    @staticmethod
     def uPivotObjectAlongTargetLocalAxis(obj: BObject, pivot_obj: BObject, pivot_axis_enum, offset_angle: float):
         if pivot_axis_enum not in ['X', 'Y', 'Z']:
             return obj
@@ -494,7 +495,6 @@ class SPRSHTT_OP_RotateCameraCCW(Operator):
         ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle_offset)
 
         if not is_helper_already_exist:
-            # delete helper objects from recreation
             for t in ['axis-helper-arrow', 'axis-helper-circle']:
                 ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
 
@@ -548,7 +548,7 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subsubcol.enabled = not addon_prop.bool_auto_camera_offset
         subsubcol.prop(addon_prop, 'float_distance_offset')
         subcol.prop(addon_prop, 'fvec_camera_target_pos_offset')
-        subcol.prop(addon_prop, 'fvec_camera_target_rot_offset')
+        # subcol.prop(addon_prop, 'fvec_camera_target_rot_offset')
         subcol.operator('object.sprshtt_create_camera', text='Spawn Camera')
         ## ColGroup 3
         subcol = col.column()
@@ -614,6 +614,3 @@ def unregister():
 
 if __name__ == '__main__':
     register()
-
-    
-    
