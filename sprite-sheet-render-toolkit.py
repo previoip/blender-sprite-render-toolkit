@@ -54,13 +54,12 @@ class Utils:
     @staticmethod
     def assertObjectMode(context):
         if context.active_object and not context.active_object.mode == 'OBJECT':
-            print('WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
+            print(f'WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
             bpy.ops.object.mode_set(mode='OBJECT')
 
 
 class ObjectUtils:
 
-    # this string configuration ensures object always stays on the bottom of object list on the outliner (assuming ascending sort)
     addon_object_default_prefix = '||sprshtt_addon_object_' 
 
     @staticmethod
@@ -95,6 +94,10 @@ class ObjectUtils:
             # scene_copy = bpy.context.copy()
             # scene_copy['selected_objects'] = objs
             # bpy.ops.object.delete(scene_copy)
+    
+    @staticmethod
+    def deleteObjectsWithPrefix(prefix: str):
+        ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(prefix))
 
     @staticmethod
     def sGenerateUniqueObjectName(mid: str = '') -> str:
@@ -107,6 +110,7 @@ class ObjectUtils:
 
     @staticmethod
     def uCalcObjectBboxDimension(obj: BObject):
+        """ Calculates relative bounding box dimension """
         rot = obj.rotation_euler.copy()
         dim = obj.dimensions.to_3d()
         corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
@@ -151,7 +155,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         name='Use Existing Camera',
         description = 'Use existing camera instead of generated from these settings',
         default=False,
-        update=lambda a, b: ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera')))
+        update=lambda a, b: ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera'))
         )
 
     enum_camera_type: EnumProperty(
@@ -294,11 +298,8 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
         Utils.assertObjectMode(context)
 
         coord, dim, rot = ObjectUtils.uCalcObjectBboxDimension(target_object)
-        # coord : Vector
-        # rot   : Euler
-        # dim   : Vector
 
-        ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix()))
+        ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
 
         bpy.ops.object.empty_add(type='SINGLE_ARROW', radius=dim.length, location=coord, rotation=rot)
         obj = bpy.context.selected_objects[0]
@@ -333,7 +334,6 @@ class SPRSHTT_OP_CreateCamera(Operator):
         scene = context.scene
         addon_prop = scene.sprshtt_properties
         objects = scene.objects
-        ops_object = bpy.ops.object # cursed bypass
         target_object = addon_prop.collection_target_objects
 
         if not target_object:
@@ -344,14 +344,13 @@ class SPRSHTT_OP_CreateCamera(Operator):
             ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
             is_helper_already_exist = True
         else:
-            ops_object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
+            bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
 
         if addon_prop.bool_existing_camera:
             context.scene.camera = ObjectUtils.qAllBObjectsWithPrefix('Camera')[0]
             return {'FINISHED'}
 
-        # program begins
-        ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera')))
+        ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera'))
         helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
 
         camera_inclination = addon_prop.float_camera_inclination_offset
@@ -373,13 +372,13 @@ class SPRSHTT_OP_CreateCamera(Operator):
         obj.data.show_limits = True
         ObjectUtils.uMoveObjectAlongAxis(obj, camera_offset, axis=(0,-1,0))
         obj.rotation_euler.rotate_axis('X', pi/2)
-        context.scene.camera = obj
-
+        # context.scene.camera = obj
+        addon_prop.collection_target_cameras = obj
 
         if not is_helper_already_exist:
             # delete helper objects from recreation
             for t in ['axis-helper-arrow', 'axis-helper-circle']:
-                ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t)))
+                ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
 
         return {'FINISHED'}
 
@@ -387,7 +386,7 @@ class SPRSHTT_OP_DeleteAllAddonObjects(Operator):
     bl_idname = 'object.sprshtt_delete_addon_objects'
     bl_label = "Delete All SPRSHTT Addon Object"
     def execute(self, context):
-        ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix()))
+        ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
         return {'FINISHED'}
 
 
@@ -433,7 +432,9 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subcol.prop(addon_prop, 'float_camera_inclination_offset')
         subcol.prop(addon_prop, 'float_camera_azimuth_offset')
         subcol.prop(addon_prop, 'bool_auto_camera_offset')
-        subcol.prop(addon_prop, 'float_distance_offset')
+        subsubcol = subcol.column()
+        subsubcol.enabled = not addon_prop.bool_auto_camera_offset
+        subsubcol.prop(addon_prop, 'float_distance_offset')
         subcol.prop(addon_prop, 'fvec_camera_target_pos_offset')
         subcol.prop(addon_prop, 'fvec_camera_target_rot_offset')
         subcol.operator('object.sprshtt_create_camera', text='Spawn Camera')
