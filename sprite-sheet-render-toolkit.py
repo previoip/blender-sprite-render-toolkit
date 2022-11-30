@@ -27,8 +27,17 @@ from bpy.props import (
     EnumProperty,
     PointerProperty
 )
-from mathutils import Vector, Matrix, Euler
-from math import pi, sqrt, log2, isclose
+from mathutils import (
+    Vector,
+    Matrix,
+    Euler
+)
+from math import (
+    pi,
+    sqrt,
+    log2,
+    isclose
+)
 
 
 
@@ -166,6 +175,50 @@ class ObjectUtils:
         pivot_obj.rotation_euler.rotate_axis(pivot_axis_enum, -offset_angle)
         Utils.loadSelectedObjectState(bpy.context)
         return obj
+
+class OperatorWrapper:
+
+    @staticmethod
+    def rotateCamera(context, multiplier: int):
+        scene = context.scene
+        addon_prop = scene.sprshtt_properties
+        camera_object = addon_prop.collection_target_cameras
+
+        if not ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')):
+            return {'CANCELLED'}
+        helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
+
+        if not camera_object:
+            return {'CANCELLED'}
+
+        is_helper_already_exist = False
+        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
+            ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
+            is_helper_already_exist = True
+        else:
+            bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT')
+
+        angle_offset = multiplier*2*pi/addon_prop.int_camera_rotation_increment
+
+        if isclose(angle_offset, 2*pi):
+            return {'CANCELLED'}
+
+        ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle_offset)
+
+        if not is_helper_already_exist:
+            for t in ['axis-helper-arrow', 'axis-helper-circle']:
+                ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
+
+        counter = addon_prop.private_int_camera_rotation_increment_counter
+        counter += (multiplier*1)
+        if counter < 0:
+            counter = addon_prop.int_camera_rotation_increment - 1
+        else:
+            counter %= addon_prop.int_camera_rotation_increment
+        addon_prop.private_int_camera_rotation_increment_counter = counter
+
+        return {'FINISHED'}
+
 
 # Addon Properties
 
@@ -316,6 +369,8 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     # ????
     private_str_target_obj_name: StringProperty()
     private_float_target_obj_dimension: FloatVectorProperty()
+    private_int_camera_rotation_increment_counter: IntProperty(update=lambda s,c: print(s.private_int_camera_rotation_increment_counter))
+    private_int_camera_rotation_dir_flag: IntProperty()
 
 
 # Addon Operators
@@ -434,72 +489,13 @@ class SPRSHTT_OP_RotateCameraCW(Operator):
     bl_label = "Rotate Camera Clockwise"
 
     def execute(self, context):
-        scene = context.scene
-        addon_prop = scene.sprshtt_properties
-        camera_object = addon_prop.collection_target_cameras
-
-        if not ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')):
-            return {'CANCELLED'}
-        helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
-
-        if not camera_object:
-            return {'CANCELLED'}
-
-        is_helper_already_exist = False
-        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
-            ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
-            is_helper_already_exist = True
-        else:
-            bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT')
-
-        angle_offset = 2*pi/addon_prop.int_camera_rotation_increment
-
-        if isclose(angle_offset, 2*pi):
-            return {'CANCELLED'}
-
-        ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle_offset)
-
-        if not is_helper_already_exist:
-            for t in ['axis-helper-arrow', 'axis-helper-circle']:
-                ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
-
-        return {'FINISHED'}
+        return OperatorWrapper.rotateCamera(context, -1)
 
 class SPRSHTT_OP_RotateCameraCCW(Operator):
     bl_idname = 'object.sprshtt_rotate_camera_ccw'
     bl_label = "Rotate Camera Counter-Clockwise"
     def execute(self, context):
-        scene = context.scene
-        addon_prop = scene.sprshtt_properties
-        camera_object = addon_prop.collection_target_cameras
-
-        if not ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')):
-            return {'CANCELLED'}
-        helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
-
-        if not camera_object:
-            return {'CANCELLED'}
-
-        is_helper_already_exist = False
-        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
-            ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
-            is_helper_already_exist = True
-        else:
-            bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
-
-        angle_offset = -2*pi/addon_prop.int_camera_rotation_increment
-
-        if isclose(angle_offset, -2*pi):
-            return {'CANCELLED'}
-
-        ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle_offset)
-
-        if not is_helper_already_exist:
-            for t in ['axis-helper-arrow', 'axis-helper-circle']:
-                ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
-
-        return {'FINISHED'}
-
+        return OperatorWrapper.rotateCamera(context, 1)
 
 
 # Addon UIs
