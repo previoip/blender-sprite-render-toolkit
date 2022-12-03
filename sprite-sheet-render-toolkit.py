@@ -36,7 +36,8 @@ from math import (
     pi,
     sqrt,
     log2,
-    isclose
+    isclose,
+    acos
 )
 
 
@@ -68,7 +69,7 @@ class Utils:
                 return False
             print(f'WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
             bpy.ops.object.mode_set(mode='OBJECT')
-            return True
+        return True
 
     @staticmethod
     def saveSelectedObjectState(context):
@@ -86,6 +87,11 @@ class Utils:
             context.view_layer.objects.active = Utils.addon_previously_selected[0]
             Utils.addon_previously_selected = None
 
+    @staticmethod
+    def iWrapAround(n, min_v, max_v):
+        n_range = max_v - min_v
+        n = n % n_range
+        return min_v + n
 
 class ObjectUtils:
     addon_object_default_prefix = '||sprshtt_addon_object_' 
@@ -145,15 +151,34 @@ class ObjectUtils:
         return Vector(center), dim, rot
 
     @staticmethod
-    def uMoveObjectAlongAxis(obj: BObject, axis=(0,0,1), offset: float = 0.0,):
-        if not isinstance(axis, Vector):
-            axis = Vector(axis)
+    def uMoveObjectAlongVector(obj: BObject, vec=(0,0,1), offset: float = 0.0):
+        if not isinstance(vec, Vector):
+            vec = Vector(vec)
         if isclose(offset, 0):
             return obj
-        vec_offset = axis * offset
-        mat_inv = obj.matrix_world.copy()
-        mat_inv.invert()
-        obj.location += vec_offset @ mat_inv
+        vec_offset = vec * offset
+
+        # personal side note: 
+        # using matrix world for relative transformation yields some side
+        # effect where past rotation transformation is preserved throughout.
+        # This causes the cross-product below to deviates in the wrong 
+        # direction, a frustrating bug to find.
+        # One solution is to recalc world matrix using C.view_layer.update
+        # but for various reason this is also to be avoided since its 
+        # relatively heavy operation. 
+
+        # Thus in this implementation a simple bounce back transformation
+        # to world origin and apply the translation that way.
+
+        # bpy.context.view_layer.update()
+        # mat_inv = obj.matrix_world.copy()
+        # mat_inv.invert()
+        # obj.location += vec_offset @ mat_inv
+
+        last_pos = obj.location.copy()
+        obj.location -= last_pos
+        obj.location += vec_offset
+        obj.location += last_pos
         return obj
 
     @staticmethod
@@ -176,49 +201,44 @@ class ObjectUtils:
         Utils.loadSelectedObjectState(bpy.context)
         return obj
 
-class OperatorWrapper:
+    @staticmethod
+    def fAngleBetweenVector(src_vector: Vector, dst_vector: Vector):
+        return acos((dst_vector.dot(src_vector))/(src_vector.length*dst_vector.length))
+
+class EventHandlers:
 
     @staticmethod
-    def rotateCamera(context, multiplier: int):
+    def CameraRotationIncrementOnUpdateCallback(_self, context):
+        if _self.int_camera_rotation_increment <= _self.private_int_camera_rotation_increment_counter:
+            _self.private_int_camera_rotation_increment_counter = _self.int_camera_rotation_increment - 1
+        EventHandlers.PrivIncrementCounterOnUpdateCallback(_self, context)
+
+    @staticmethod
+    def PrivIncrementCounterOnUpdateCallback(_self, context):
+        # side note:
+        # updating the value directly from context->scene->prop will call the setter event on the attr instead,
+        # thus this will not trigger update event on _self and cause infinite recursion!
         scene = context.scene
         addon_prop = scene.sprshtt_properties
-        camera_object = addon_prop.collection_target_cameras
 
+        addon_prop['private_int_camera_rotation_increment_counter'] = \
+            Utils.iWrapAround(_self.private_int_camera_rotation_increment_counter, 0, _self.int_camera_rotation_increment)
+        camera_object = addon_prop.collection_target_cameras
+        if not camera_object:
+            return
+        if not Utils.bAssertObjectMode(context, strict=False):
+            return
         if not ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')):
-            return {'CANCELLED'}
+            return
         helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
 
-        if not camera_object:
-            return {'CANCELLED'}
-
-        is_helper_already_exist = False
-        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
-            ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
-            is_helper_already_exist = True
-        else:
-            bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT')
-
-        angle_offset = multiplier*2*pi/addon_prop.int_camera_rotation_increment
-
-        if isclose(angle_offset, 2*pi):
-            return {'CANCELLED'}
-
-        ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle_offset)
-
-        if not is_helper_already_exist:
-            for t in ['axis-helper-arrow', 'axis-helper-circle']:
-                ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
-
-        counter = addon_prop.private_int_camera_rotation_increment_counter
-        counter += (multiplier*1)
-        if counter < 0:
-            counter = addon_prop.int_camera_rotation_increment - 1
-        else:
-            counter %= addon_prop.int_camera_rotation_increment
-        addon_prop.private_int_camera_rotation_increment_counter = counter
-
-        return {'FINISHED'}
-
+        loc, _, rot = ObjectUtils.uCalcObjectBboxDimension(helper_object)
+        camera_object.location = loc
+        camera_object.rotation_euler = rot
+        ObjectUtils.uMoveObjectAlongVector(camera_object, Vector((0,-1,0)), addon_prop.float_distance_offset)
+        camera_object.rotation_euler.rotate_axis('X', pi/2)
+        angle = (_self.private_int_camera_rotation_increment_counter/_self.int_camera_rotation_increment) * 2 * pi
+        ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle)
 
 # Addon Properties
 
@@ -296,7 +316,8 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         description = 'Camera n of increment in one render cycle (rotates 360 degrees).',
         default=8, 
         min=1, 
-        max=36
+        max=36,
+        update=EventHandlers.CameraRotationIncrementOnUpdateCallback
         )
 
     bool_auto_camera_offset: BoolProperty(
@@ -310,7 +331,6 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         description = 'Camera distance offset to target reference',
         min=0,
         default=20, 
-        max=1000
         )
 
     bool_auto_camera_scale: BoolProperty(
@@ -366,11 +386,12 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         name='Camera'
         )
     
-    # ????
+    # additional 'private' property as extra value container
     private_str_target_obj_name: StringProperty()
     private_float_target_obj_dimension: FloatVectorProperty()
-    private_int_camera_rotation_increment_counter: IntProperty(update=lambda s,c: print(s.private_int_camera_rotation_increment_counter))
-    private_int_camera_rotation_dir_flag: IntProperty()
+    private_int_camera_rotation_increment_counter: IntProperty(
+        update=EventHandlers.PrivIncrementCounterOnUpdateCallback
+    )
 
 
 # Addon Operators
@@ -425,7 +446,6 @@ class SPRSHTT_OP_CreateCamera(Operator):
     def execute(self, context):
         scene = context.scene
         addon_prop = scene.sprshtt_properties
-        objects = scene.objects
         target_object = addon_prop.collection_target_objects
 
         if not target_object:
@@ -451,11 +471,10 @@ class SPRSHTT_OP_CreateCamera(Operator):
         camera_azimuth = addon_prop.float_camera_azimuth_offset
         camera_offset = addon_prop.float_distance_offset
         _, target_dim, _  = ObjectUtils.uCalcObjectBboxDimension(target_object)
+        loc, dim, rot = ObjectUtils.uCalcObjectBboxDimension(helper_object)
         if addon_prop.bool_auto_camera_offset:
-            _, dim, _  = ObjectUtils.uCalcObjectBboxDimension(helper_object)
             camera_offset = helper_object.empty_display_size + log2(target_dim.length + 1) * 8
-
-        loc, _, rot = ObjectUtils.uCalcObjectBboxDimension(helper_object)
+        addon_prop.float_distance_offset = camera_offset
 
         bpy.ops.object.camera_add(location=loc, rotation=rot)
 
@@ -464,7 +483,7 @@ class SPRSHTT_OP_CreateCamera(Operator):
         obj.data.type = addon_prop.enum_camera_type
         obj.data.show_sensor = True
         obj.data.show_limits = True
-        ObjectUtils.uMoveObjectAlongAxis(obj, (0,-1,0), camera_offset)
+        ObjectUtils.uMoveObjectAlongVector(obj, (0,-1,0), camera_offset)
         obj.rotation_euler.rotate_axis('X', pi/2)
         obj.data.clip_start = max(1e-4, camera_offset - target_dim.length * 1.5)
         obj.data.clip_end = max(1e-4, camera_offset + target_dim.length * 1.5)
@@ -489,13 +508,21 @@ class SPRSHTT_OP_RotateCameraCW(Operator):
     bl_label = "Rotate Camera Clockwise"
 
     def execute(self, context):
-        return OperatorWrapper.rotateCamera(context, -1)
+        scene = context.scene
+        addon_prop = scene.sprshtt_properties
+        addon_prop.private_int_camera_rotation_increment_counter -= 1
+        
+        return {'FINISHED'}
 
 class SPRSHTT_OP_RotateCameraCCW(Operator):
     bl_idname = 'object.sprshtt_rotate_camera_ccw'
     bl_label = "Rotate Camera Counter-Clockwise"
     def execute(self, context):
-        return OperatorWrapper.rotateCamera(context, 1)
+        scene = context.scene
+        addon_prop = scene.sprshtt_properties
+        addon_prop.private_int_camera_rotation_increment_counter += 1
+        
+        return {'FINISHED'}
 
 
 # Addon UIs
