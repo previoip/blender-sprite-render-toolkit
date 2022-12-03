@@ -37,7 +37,8 @@ from math import (
     sqrt,
     log2,
     isclose,
-    acos
+    acos,
+    radians
 )
 
 
@@ -140,7 +141,7 @@ class ObjectUtils:
                 return name
 
     @staticmethod
-    def uCalcObjectBboxDimension(obj: BObject):
+    def uDecomposeObjectBboxDimension(obj: BObject):
         """ Calculates relative bounding box dimension """
         rot = obj.rotation_euler.copy()
         dim = obj.dimensions.to_3d()
@@ -232,13 +233,27 @@ class EventHandlers:
             return
         helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
 
-        loc, _, rot = ObjectUtils.uCalcObjectBboxDimension(helper_object)
-        camera_object.location = loc
-        camera_object.rotation_euler = rot
-        ObjectUtils.uMoveObjectAlongVector(camera_object, Vector((0,-1,0)), addon_prop.float_distance_offset)
-        camera_object.rotation_euler.rotate_axis('X', pi/2)
+        loc, _, rot = ObjectUtils.uDecomposeObjectBboxDimension(helper_object)
+        SubroutineWrapper.cameraSetup(
+            camera_object, 
+            loc, 
+            rot, 
+            Vector((addon_prop.float_distance_offset,0,0)), 
+            Euler((addon_prop.float_camera_angle_pitch, 0, 0))
+        )
         angle = (_self.private_int_camera_rotation_increment_counter/_self.int_camera_rotation_increment) * 2 * pi
         ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle)
+
+class SubroutineWrapper:
+    
+    @staticmethod
+    def cameraSetup(camera_object: BObject, location: Vector, rotation: Euler, location_offset: Vector, yaw_pitch_roll: Euler):
+        camera_object.location = location
+        camera_object.rotation_euler = rotation
+        ObjectUtils.uMoveObjectAlongVector(camera_object, Vector((0,-1,0)) @ yaw_pitch_roll.to_matrix(), location_offset.length)
+        camera_object.rotation_euler.rotate_axis('X',pi/2-yaw_pitch_roll.x)
+
+
 
 # Addon Properties
 
@@ -291,18 +306,18 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         max=1000
         )
 
-    float_camera_inclination_offset: FloatProperty(
-        name='Camera Inclination', 
+    float_camera_angle_pitch: FloatProperty(
+        name='Pitch', 
         description = 'Camera inclination to the normal plane of target object.',
-        default=57.3*pi/180, 
+        default=radians(57.3),
         min=-pi, 
         max=pi, 
         precision=2,
         subtype='ANGLE'
         )
 
-    float_camera_azimuth_offset: FloatProperty(
-        name='Camera Azimuth', 
+    float_camera_angle_yaw: FloatProperty(
+        name='Yaw', 
         description = 'Camera angle offset to target reference',
         default=0, 
         min=-pi,
@@ -316,7 +331,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         description = 'Camera n of increment in one render cycle (rotates 360 degrees).',
         default=8, 
         min=1, 
-        max=36,
+        soft_max=36,
         update=EventHandlers.CameraRotationIncrementOnUpdateCallback
         )
 
@@ -410,7 +425,7 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
 
         Utils.bAssertObjectMode(context)
 
-        coord, dim, rot = ObjectUtils.uCalcObjectBboxDimension(target_object)
+        coord, dim, rot = ObjectUtils.uDecomposeObjectBboxDimension(target_object)
 
         ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
 
@@ -467,24 +482,27 @@ class SPRSHTT_OP_CreateCamera(Operator):
         ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera'))
         helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
 
-        camera_inclination = addon_prop.float_camera_inclination_offset
-        camera_azimuth = addon_prop.float_camera_azimuth_offset
         camera_offset = addon_prop.float_distance_offset
-        _, target_dim, _  = ObjectUtils.uCalcObjectBboxDimension(target_object)
-        loc, dim, rot = ObjectUtils.uCalcObjectBboxDimension(helper_object)
+        _, target_dim, _  = ObjectUtils.uDecomposeObjectBboxDimension(target_object)
+        loc, dim, rot = ObjectUtils.uDecomposeObjectBboxDimension(helper_object)
         if addon_prop.bool_auto_camera_offset:
             camera_offset = helper_object.empty_display_size + log2(target_dim.length + 1) * 8
         addon_prop.float_distance_offset = camera_offset
 
-        bpy.ops.object.camera_add(location=loc, rotation=rot)
-
+        # bpy.ops.object.camera_add(location=loc, rotation=rot)
+        bpy.ops.object.camera_add()
         obj = context.selected_objects[0]
+        SubroutineWrapper.cameraSetup(
+            obj,
+            loc,
+            rot,
+            Vector((addon_prop.float_distance_offset,0,0)),
+            Euler((addon_prop.float_camera_angle_pitch, 0, 0))
+        )
         obj.name = ObjectUtils.sGenerateUniqueObjectName('camera')
         obj.data.type = addon_prop.enum_camera_type
         obj.data.show_sensor = True
         obj.data.show_limits = True
-        ObjectUtils.uMoveObjectAlongVector(obj, (0,-1,0), camera_offset)
-        obj.rotation_euler.rotate_axis('X', pi/2)
         obj.data.clip_start = max(1e-4, camera_offset - target_dim.length * 1.5)
         obj.data.clip_end = max(1e-4, camera_offset + target_dim.length * 1.5)
         context.scene.camera = obj
@@ -493,6 +511,8 @@ class SPRSHTT_OP_CreateCamera(Operator):
         if not is_helper_already_exist:
             for t in ['axis-helper-arrow', 'axis-helper-circle']:
                 ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
+
+        addon_prop.private_int_camera_rotation_increment_counter = 0
 
         return {'FINISHED'}
 
@@ -564,13 +584,13 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subcol = col.column()
         subcol.enabled = not addon_prop.bool_existing_camera
         subcol.prop(addon_prop, 'enum_camera_type')
-        subcol.prop(addon_prop, 'float_camera_inclination_offset')
-        subcol.prop(addon_prop, 'float_camera_azimuth_offset')
+        subcol.prop(addon_prop, 'float_camera_angle_pitch')
+        subcol.prop(addon_prop, 'float_camera_angle_yaw')
         subcol.prop(addon_prop, 'bool_auto_camera_offset')
         subsubcol = subcol.column()
         subsubcol.enabled = not addon_prop.bool_auto_camera_offset
         subsubcol.prop(addon_prop, 'float_distance_offset')
-        subcol.prop(addon_prop, 'fvec_camera_target_pos_offset')
+        # subcol.prop(addon_prop, 'fvec_camera_target_pos_offset')
         # subcol.prop(addon_prop, 'fvec_camera_target_rot_offset')
         subcol.operator('object.sprshtt_create_camera', text='Spawn Camera')
         ## ColGroup 3
