@@ -210,8 +210,8 @@ class EventHandlers:
 
     @staticmethod
     def CameraRotationIncrementOnUpdateCallback(_self, context):
-        if _self.int_camera_rotation_increment <= _self.private_int_camera_rotation_increment_counter:
-            _self.private_int_camera_rotation_increment_counter = _self.int_camera_rotation_increment - 1
+        if _self.int_camera_rotation_increment_limit <= _self.int_camera_rotation_preview:
+            _self.int_camera_rotation_preview = _self.int_camera_rotation_increment_limit - 1
         EventHandlers.PrivIncrementCounterOnUpdateCallback(_self, context)
 
     @staticmethod
@@ -234,7 +234,7 @@ class EventHandlers:
             loc, 
             rot, 
             Vector((_self.float_distance_offset,0,0)), 
-            Euler((_self.float_camera_angle_pitch, _self.float_camera_angle_yaw, _self.float_camera_angle_roll))
+            Euler((_self.float_camera_angle_pitch, _self.float_camera_angle_roll, _self.float_camera_angle_yaw))
         )
 
         Subroutine.setCameraIntrinsic(
@@ -246,7 +246,7 @@ class EventHandlers:
             )
         )
 
-        angle = (_self.private_int_camera_rotation_increment_counter/_self.int_camera_rotation_increment) * 2 * pi
+        angle = (_self.int_camera_rotation_preview/_self.int_camera_rotation_increment_limit) * 2 * pi
         ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle)
 
     @staticmethod
@@ -257,8 +257,8 @@ class EventHandlers:
         scene = context.scene
         addon_prop = scene.sprshtt_properties
 
-        addon_prop['private_int_camera_rotation_increment_counter'] = \
-            Utils.iWrapAround(_self.private_int_camera_rotation_increment_counter, 0, _self.int_camera_rotation_increment)
+        addon_prop['int_camera_rotation_preview'] = \
+            Utils.iWrapAround(_self.int_camera_rotation_preview, 0, _self.int_camera_rotation_increment_limit)
         EventHandlers.CameraUpdateCallback(_self, context)
 
 class Subroutine:
@@ -266,12 +266,17 @@ class Subroutine:
     @staticmethod
     def setCameraTransformation(camera_object: BObject, location: Vector, rotation: Euler, location_offset: Vector, yaw_pitch_roll: Euler):
         camera_object.location = location
+        roll = yaw_pitch_roll.y
+        yaw_pitch_roll = Euler((pi/2 - yaw_pitch_roll.x, 0, pi/2 + yaw_pitch_roll.z))
+        rotation = (rotation.to_matrix() @ yaw_pitch_roll.to_matrix()).to_euler(camera_object.rotation_mode)
         camera_object.rotation_euler = rotation
-        roll = yaw_pitch_roll.z
-        yaw_pitch_roll = Euler((yaw_pitch_roll.x, yaw_pitch_roll.y, 0))
-        ObjectUtils.uMoveObjectAlongVector(camera_object, Vector((0,-1,0)) @ yaw_pitch_roll.to_matrix(), location_offset.length)
-        camera_object.rotation_euler.rotate_axis('X', pi/2-yaw_pitch_roll.x)
-        camera_object.rotation_euler.rotate_axis('Y', 2*pi-yaw_pitch_roll.y)
+        up_vec = Vector((0,0,1))
+        up_vec.rotate(rotation)
+        ObjectUtils.uMoveObjectAlongVector(
+            camera_object, 
+            up_vec,
+            location_offset.length
+        )
         camera_object.rotation_euler.rotate_axis('Z', roll)
 
     def setCameraIntrinsic(camera_object: BObject, camera_type: str, camera_clipping_limit: tuple):
@@ -366,14 +371,24 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         )
 
 
-    int_camera_rotation_increment: IntProperty(
+    int_camera_rotation_increment_limit: IntProperty(
         name='Increment', 
         description = 'Camera n of increment in one render cycle (rotates 360 degrees).',
         default=8, 
         min=1, 
         soft_max=36,
+        max=99,
         update=EventHandlers.CameraRotationIncrementOnUpdateCallback
         )
+
+    int_camera_rotation_preview: IntProperty(
+        default=0, 
+        min=0, 
+        soft_max=36,
+        max=99,
+        update=EventHandlers.PrivIncrementCounterOnUpdateCallback
+    )
+
 
     bool_auto_camera_offset: BoolProperty(
         name='Auto Offset', 
@@ -393,26 +408,6 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         name='Auto Camera Scale', 
         description = 'Automatically set camera scale by object bounding-box size',
         default=False,
-        )
-
-    range_camera_movement_rotation: FloatProperty(
-        name='Pivot Angle', 
-        description = 'Adjust camera initial position',
-        default=pi/4, 
-        min=-pi, 
-        max=pi, 
-        precision=2,
-        subtype='ANGLE'
-        )
-
-    range_camera_movement_rotation: FloatProperty(
-        name='Pivot Angle', 
-        description = 'Adjust camera initial position',
-        default=45, 
-        min=-pi, 
-        max=pi, 
-        precision=2,
-        subtype='ANGLE'
         )
 
     fvec_camera_target_pos_offset: FloatVectorProperty(
@@ -445,9 +440,6 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     # additional 'private' property as extra value container
     private_str_target_obj_name: StringProperty()
     private_float_target_obj_dimension: FloatVectorProperty()
-    private_int_camera_rotation_increment_counter: IntProperty(
-        update=EventHandlers.PrivIncrementCounterOnUpdateCallback
-    )
 
 
 # Addon Operators
@@ -543,7 +535,7 @@ class SPRSHTT_OP_CreateCamera(Operator):
             for t in ['axis-helper-arrow', 'axis-helper-circle']:
                 ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
 
-        addon_prop.private_int_camera_rotation_increment_counter = 0
+        addon_prop.int_camera_rotation_preview = 0
 
         return {'FINISHED'}
 
@@ -554,26 +546,26 @@ class SPRSHTT_OP_DeleteAllAddonObjects(Operator):
         ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
         return {'FINISHED'}
 
-class SPRSHTT_OP_RotateCameraCW(Operator):
-    bl_idname = 'object.sprshtt_rotate_camera_cw'
-    bl_label = "Rotate Camera Clockwise"
+# class SPRSHTT_OP_RotateCameraCW(Operator):
+#     bl_idname = 'object.sprshtt_rotate_camera_cw'
+#     bl_label = "Rotate Camera Clockwise"
 
-    def execute(self, context):
-        scene = context.scene
-        addon_prop = scene.sprshtt_properties
-        addon_prop.private_int_camera_rotation_increment_counter -= 1
+#     def execute(self, context):
+#         scene = context.scene
+#         addon_prop = scene.sprshtt_properties
+#         addon_prop.int_camera_rotation_preview -= 1
         
-        return {'FINISHED'}
+#         return {'FINISHED'}
 
-class SPRSHTT_OP_RotateCameraCCW(Operator):
-    bl_idname = 'object.sprshtt_rotate_camera_ccw'
-    bl_label = "Rotate Camera Counter-Clockwise"
-    def execute(self, context):
-        scene = context.scene
-        addon_prop = scene.sprshtt_properties
-        addon_prop.private_int_camera_rotation_increment_counter += 1
+# class SPRSHTT_OP_RotateCameraCCW(Operator):
+#     bl_idname = 'object.sprshtt_rotate_camera_ccw'
+#     bl_label = "Rotate Camera Counter-Clockwise"
+#     def execute(self, context):
+#         scene = context.scene
+#         addon_prop = scene.sprshtt_properties
+#         addon_prop.int_camera_rotation_preview += 1
         
-        return {'FINISHED'}
+#         return {'FINISHED'}
 
 
 # Addon UIs
@@ -606,15 +598,17 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subcol = col.column()
         subcol.enabled = bool(addon_prop.collection_target_objects) 
         subcol.operator('object.sprshtt_create_helper_object', text='Spawn Target Helper')
-        # col.prop(addon_prop, 'bool_existing_camera')
+
         ## ColGroup 1
         subcol = col.column()
         subcol.enabled = False # addon_prop.bool_existing_camera 
         subcol.prop(addon_prop, 'collection_target_cameras')
+
         ## ColGroup 2
         subcol = col.column()
         subcol.enabled = not addon_prop.bool_existing_camera
         subcol.prop(addon_prop, 'enum_camera_type')
+
         ## ColGroup 2 Row
         subrow = subcol.row(align=True)
         subrow.prop(addon_prop, 'float_camera_angle_pitch')
@@ -627,12 +621,11 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         # subcol.prop(addon_prop, 'fvec_camera_target_pos_offset')
         # subcol.prop(addon_prop, 'fvec_camera_target_rot_offset')
         subcol.operator('object.sprshtt_create_camera', text='Spawn Camera')
+
         ## ColGroup 3
         subcol = col.column()
-        row = subcol.row()
-        row.enabled = bool(addon_prop.collection_target_cameras)
-        row.operator('object.sprshtt_rotate_camera_cw', text='CW')
-        row.operator('object.sprshtt_rotate_camera_ccw', text='CCW')
+        # row.operator('object.sprshtt_rotate_camera_cw', text='CW')
+        # row.operator('object.sprshtt_rotate_camera_ccw', text='CCW')
 
 class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel):
     bl_label = "Renderer Settings"
@@ -642,8 +635,13 @@ class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel)
         layout = self.layout
         addon_prop = context.scene.sprshtt_properties
         scene = context.scene
+
         col = layout.column()
-        col.prop(addon_prop, 'int_camera_rotation_increment')
+        col.prop(addon_prop, 'int_camera_rotation_increment_limit')
+        subcol = col.column()
+        subcol.enabled = bool(addon_prop.collection_target_cameras)
+        subcol.prop(addon_prop, 'int_camera_rotation_preview', text='Preview')
+
         col.prop(addon_prop, 'bool_frame_skip')
         subcol = col.column()
         subcol.enabled = addon_prop.bool_frame_skip
@@ -674,8 +672,8 @@ classes = (
     SPRSHTT_OP_CreateHelperObject,
     SPRSHTT_OP_CreateCamera,
     SPRSHTT_OP_DeleteAllAddonObjects,
-    SPRSHTT_OP_RotateCameraCW,
-    SPRSHTT_OP_RotateCameraCCW,
+    # SPRSHTT_OP_RotateCameraCW,
+    # SPRSHTT_OP_RotateCameraCCW,
     SPRSHTT_PropertyGroup,
 )
 
