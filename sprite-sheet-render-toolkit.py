@@ -4,7 +4,7 @@ bl_info = {
     "category": "Render",
     "support": "COMMUNITY",
     "author": "Previo Prakasa (github.com/previoip)",
-    "version": (0, 0, 1),
+    "version": (0, 0, 2),
     "location": "View3D > Properties > Render",
     "description": "Render toolkit using camera manipulation for generating 2D sprite sheet from 3D assets.",
     "warning": "This is an experimental project and should not be used in any form of production (as of today).",
@@ -14,6 +14,7 @@ import bpy
 import os
 from random import getrandbits
 from bpy.types import (
+    Scene,
     PropertyGroup,
     Operator,
     Object as BObject
@@ -26,6 +27,12 @@ from bpy.props import (
     StringProperty,
     EnumProperty,
     PointerProperty
+)
+from bpy.path import (
+    abspath,
+    relpath,
+    clean_name,
+    native_pathsep
 )
 from mathutils import (
     Vector,
@@ -56,12 +63,6 @@ class Utils:
         context.scene.render.filepath = target_filepath
         bpy.ops.render.render(write_still=True)
         context.scene.render.filepath = curr_filepath
-
-    @staticmethod
-    def mkdir(path: str):
-        """ Creates new directory if said directory does not exist """
-        if not os.path.isdir(path):
-            os.mkdir(path)
 
     @staticmethod
     def bAssertObjectMode(context, strict=True):
@@ -209,13 +210,13 @@ class ObjectUtils:
 class EventHandlers:
 
     @staticmethod
-    def CameraRotationIncrementOnUpdateCallback(_self, context):
+    def camRotationCounterCallback(_self, context):
         if _self.int_camera_rotation_increment_limit <= _self.int_camera_rotation_preview:
             _self.int_camera_rotation_preview = _self.int_camera_rotation_increment_limit - 1
-        EventHandlers.PrivIncrementCounterOnUpdateCallback(_self, context)
+        EventHandlers.camIncrUpdateCallback(_self, context)
 
     @staticmethod
-    def CameraUpdateCallback(_self, context):
+    def camUpdateCallback(_self, context):
         camera_object = _self.collection_target_cameras
         target_object = _self.collection_target_objects
         _, target_dim, _  = ObjectUtils.uDecomposeObjectBboxDimension(target_object)
@@ -250,7 +251,7 @@ class EventHandlers:
         ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle)
 
     @staticmethod
-    def PrivIncrementCounterOnUpdateCallback(_self, context):
+    def camIncrUpdateCallback(_self, context):
         # side note:
         # updating the value directly from context->scene->prop will call the setter event on the attr instead,
         # thus this will not trigger update event on _self and cause infinite recursion!
@@ -259,7 +260,18 @@ class EventHandlers:
 
         addon_prop['int_camera_rotation_preview'] = \
             Utils.iWrapAround(_self.int_camera_rotation_preview, 0, _self.int_camera_rotation_increment_limit)
-        EventHandlers.CameraUpdateCallback(_self, context)
+        EventHandlers.camUpdateCallback(_self, context)
+
+    def frameSkipUpdateCallback(_self, context):
+        scene = context.scene
+        addon_prop = scene.sprshtt_properties
+
+        frame_start = scene.frame_start
+        frame_end = scene.frame_end
+        frame_range = frame_end - frame_start
+        frame_skip = addon_prop.int_frame_skip
+        addon_prop['int_frame_skip'] = min(frame_range, frame_skip)
+
 
 class Subroutine:
     
@@ -292,12 +304,12 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     str_export_folder: StringProperty(
         name='Export Folder', 
         description = 'Export subfolder',
-        default='/export'
+        default='export'
         )
 
     str_file_suffix: StringProperty(
         name='Suffix', 
-        description = 'Generated images suffix',
+        description = 'Export images suffix',
         default=''
         )
 
@@ -321,7 +333,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
             ("PERSP", "Perspective", "", 2),
         ],
         default="ORTHO",
-        update=EventHandlers.CameraUpdateCallback
+        update=EventHandlers.camUpdateCallback
         )
 
     bool_frame_skip: BoolProperty(
@@ -334,40 +346,41 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         description = 'Skips frame if jump number of frames for rendering (used to check render result)',
         default=10, 
         min=1, 
-        max=1000
+        soft_max=1000,
+        update=EventHandlers.frameSkipUpdateCallback
         )
 
     float_camera_angle_pitch: FloatProperty(
         name='Pitch', 
-        description = 'Camera inclination to the normal plane of target object.',
+        description = 'Camera Pitch',
         default=radians(57.3),
         min=-pi, 
         max=pi, 
         precision=2,
         subtype='ANGLE',
-        update=EventHandlers.CameraUpdateCallback
+        update=EventHandlers.camUpdateCallback
         )
 
     float_camera_angle_yaw: FloatProperty(
         name='Yaw', 
-        description = 'Camera angle offset to target reference',
+        description = 'Camera Yaw',
         default=0, 
         min=-pi,
         max=pi,
         precision=2,
         subtype='ANGLE',
-        update=EventHandlers.CameraUpdateCallback
+        update=EventHandlers.camUpdateCallback
         )
 
     float_camera_angle_roll: FloatProperty(
         name='Roll',
-        description = 'Camera angle offset to target reference',
+        description = 'Camera Roll',
         default=0, 
         min=-pi,
         max=pi,
         precision=2,
         subtype='ANGLE',
-        update=EventHandlers.CameraUpdateCallback
+        update=EventHandlers.camUpdateCallback
         )
 
 
@@ -378,7 +391,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         min=1, 
         soft_max=36,
         max=99,
-        update=EventHandlers.CameraRotationIncrementOnUpdateCallback
+        update=EventHandlers.camRotationCounterCallback
         )
 
     int_camera_rotation_preview: IntProperty(
@@ -386,9 +399,8 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         min=0, 
         soft_max=36,
         max=99,
-        update=EventHandlers.PrivIncrementCounterOnUpdateCallback
+        update=EventHandlers.camIncrUpdateCallback
     )
-
 
     bool_auto_camera_offset: BoolProperty(
         name='Auto Offset', 
@@ -401,7 +413,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         description = 'Camera distance offset to target reference',
         min=0,
         default=20,
-        update=EventHandlers.CameraUpdateCallback
+        update=EventHandlers.camUpdateCallback
         )
 
     bool_auto_camera_scale: BoolProperty(
@@ -416,7 +428,6 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         default=(0.0, 0.0, 0.0),  
         unit='LENGTH'
         )
-
 
     fvec_camera_target_rot_offset: FloatVectorProperty(
         name='Tilt Offset', 
@@ -501,11 +512,7 @@ class SPRSHTT_OP_CreateCamera(Operator):
 
         Utils.bAssertObjectMode(context)
 
-        is_helper_already_exist = False
-        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')) and \
-            ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-circle')):
-            is_helper_already_exist = True
-        else:
+        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper')):
             bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
 
         if addon_prop.bool_existing_camera:
@@ -529,11 +536,7 @@ class SPRSHTT_OP_CreateCamera(Operator):
         obj.name = ObjectUtils.sGenerateUniqueObjectName('camera')
         context.scene.camera = obj
         addon_prop.collection_target_cameras = obj
-        EventHandlers.CameraUpdateCallback(addon_prop, context)
-
-        if not is_helper_already_exist:
-            for t in ['axis-helper-arrow', 'axis-helper-circle']:
-                ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix(t))
+        EventHandlers.camUpdateCallback(addon_prop, context)
 
         addon_prop.int_camera_rotation_preview = 0
 
@@ -546,26 +549,73 @@ class SPRSHTT_OP_DeleteAllAddonObjects(Operator):
         ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
         return {'FINISHED'}
 
-# class SPRSHTT_OP_RotateCameraCW(Operator):
-#     bl_idname = 'object.sprshtt_rotate_camera_cw'
-#     bl_label = "Rotate Camera Clockwise"
 
-#     def execute(self, context):
-#         scene = context.scene
-#         addon_prop = scene.sprshtt_properties
-#         addon_prop.int_camera_rotation_preview -= 1
-        
-#         return {'FINISHED'}
 
-# class SPRSHTT_OP_RotateCameraCCW(Operator):
-#     bl_idname = 'object.sprshtt_rotate_camera_ccw'
-#     bl_label = "Rotate Camera Counter-Clockwise"
-#     def execute(self, context):
-#         scene = context.scene
-#         addon_prop = scene.sprshtt_properties
-#         addon_prop.int_camera_rotation_preview += 1
+class SPRSHTT_OP_Render(Operator):
+    bl_idname = "object.sprshtt_render"
+    bl_label = "Do you really want to do that?"
+    bl_options = {'REGISTER', 'INTERNAL'} # internal option removes operator from blender search
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        scene = context.scene
+        addon_prop = scene.sprshtt_properties
+
+        target_name = addon_prop.collection_target_objects.name
+        render_subfolder = addon_prop.str_export_folder
+        render_file_suffix = addon_prop.str_file_suffix
+        render_file_format = scene.render.image_settings.file_format
+        render_fp = abspath(scene.render.filepath)
+
+        bitmap_file_formats = ['PNG', 'BMP', 'JPEG', 'JPEG2000', 'TARGA', 'TARGA_RAW', 'IRIS']
+        if render_file_format not in bitmap_file_formats:
+            self.report({'INFO'}, f'File format not supported: {render_file_format}')
+            return {'CANCELLED'}
+
+        if not render_file_suffix:
+            render_file_suffix = target_name
+
+        render_file_suffix = clean_name(render_file_suffix)
+
+        if render_subfolder:
+            render_subfolder = native_pathsep(render_subfolder).lstrip(os.path.sep)
+            render_fp = os.path.join(render_fp, render_subfolder)
+            if not os.path.isdir(render_fp):
+                os.mkdir(render_fp)
+                self.report({'INFO'}, f'Created new folder {render_fp}')
+
+        frame_start = scene.frame_start
+        frame_end = scene.frame_end
+        frame_range = frame_end - frame_start
+        frame_skip = addon_prop.int_frame_skip
+        if not addon_prop.bool_frame_skip:
+            frame_skip = 1
+
+            render_subsubfolder = os.path.join(render_fp, render_file_suffix)
+            if not os.path.isdir(render_subsubfolder):
+                os.mkdir(render_subsubfolder)
+                self.report({'INFO'}, f'Created new folder {render_subsubfolder}')
         
-#         return {'FINISHED'}
+        for increment in range(addon_prop.int_camera_rotation_increment_limit):
+            addon_prop.int_camera_rotation_preview = increment
+            frame = frame_start
+            curr_angle = int(increment*360/addon_prop.int_camera_rotation_increment_limit)
+            while frame < frame_end:
+                if frame > frame_end:
+                    break
+                scene.frame_current = frame
+                frame += frame_skip
+                filename = f'd{curr_angle*360:03}_{frame:06}.{render_file_format.lower()}'
+                Utils.renderToPath(context, render_subsubfolder, filename)
+
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_confirm(self, event)
+        return {'FINISHED'}
 
 
 # Addon UIs
@@ -594,22 +644,19 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         col = layout.column()
         col.operator('object.sprshtt_delete_addon_objects', text='Delete Addon Objects')
         col.prop(addon_prop, 'collection_target_objects' )
-        ## ColGroup 0
+
         subcol = col.column()
         subcol.enabled = bool(addon_prop.collection_target_objects) 
         subcol.operator('object.sprshtt_create_helper_object', text='Spawn Target Helper')
 
-        ## ColGroup 1
         subcol = col.column()
         subcol.enabled = False # addon_prop.bool_existing_camera 
         subcol.prop(addon_prop, 'collection_target_cameras')
 
-        ## ColGroup 2
         subcol = col.column()
         subcol.enabled = not addon_prop.bool_existing_camera
         subcol.prop(addon_prop, 'enum_camera_type')
 
-        ## ColGroup 2 Row
         subrow = subcol.row(align=True)
         subrow.prop(addon_prop, 'float_camera_angle_pitch')
         subrow.prop(addon_prop, 'float_camera_angle_yaw')
@@ -618,14 +665,8 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subsubcol = subcol.column()
         subsubcol.enabled = not addon_prop.bool_auto_camera_offset
         subsubcol.prop(addon_prop, 'float_distance_offset')
-        # subcol.prop(addon_prop, 'fvec_camera_target_pos_offset')
-        # subcol.prop(addon_prop, 'fvec_camera_target_rot_offset')
         subcol.operator('object.sprshtt_create_camera', text='Spawn Camera')
 
-        ## ColGroup 3
-        subcol = col.column()
-        # row.operator('object.sprshtt_rotate_camera_cw', text='CW')
-        # row.operator('object.sprshtt_rotate_camera_ccw', text='CCW')
 
 class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel):
     bl_label = "Renderer Settings"
@@ -644,8 +685,8 @@ class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel)
 
         col.prop(addon_prop, 'bool_frame_skip')
         subcol = col.column()
-        subcol.enabled = addon_prop.bool_frame_skip
-        subcol.prop(addon_prop, 'int_frame_skip')
+        if addon_prop.bool_frame_skip:
+            subcol.prop(addon_prop, 'int_frame_skip')
 
 class SPRSHTT_PT_render_panel_output(SPRSHTT_Panel_baseProps, bpy.types.Panel):
     bl_label = "Output Preference"
@@ -661,6 +702,10 @@ class SPRSHTT_PT_render_panel_output(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         col.prop(addon_prop, 'str_file_suffix')
         col.prop(addon_prop, 'bool_post_processing')
 
+        subcol = col.column()
+        subcol.enabled = bool(addon_prop.collection_target_cameras)
+        subcol.operator('object.sprshtt_render', text='Render')
+
 
 # Addon Register/Unregister
 
@@ -671,21 +716,20 @@ classes = (
     SPRSHTT_PT_render_panel_output, 
     SPRSHTT_OP_CreateHelperObject,
     SPRSHTT_OP_CreateCamera,
+    SPRSHTT_OP_Render,
     SPRSHTT_OP_DeleteAllAddonObjects,
-    # SPRSHTT_OP_RotateCameraCW,
-    # SPRSHTT_OP_RotateCameraCCW,
     SPRSHTT_PropertyGroup,
 )
 
 def register():
-    for cl in classes:
-        bpy.utils.register_class(cl)
-    bpy.types.Scene.sprshtt_properties = PointerProperty(type=SPRSHTT_PropertyGroup)
+    for cls in classes:
+        bpy.utils.register_class(cls)
+    Scene.sprshtt_properties = PointerProperty(type=SPRSHTT_PropertyGroup)
 
 def unregister():
-    for cl in classes:
-        bpy.utils.unregister_class(cl)
-    delattr(bpy.types.Scene, 'sprshtt_properties')
+    for cls in classes:
+        bpy.utils.unregister_class(cls)
+    delattr(Scene, 'sprshtt_properties')
 
 if __name__ == '__main__':
     register()
