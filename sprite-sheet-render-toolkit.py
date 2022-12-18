@@ -17,6 +17,7 @@ from bpy.types import (
     Scene,
     PropertyGroup,
     Operator,
+    Panel,
     Object as BObject
 )
 from bpy.props import (
@@ -41,13 +42,10 @@ from mathutils import (
 )
 from math import (
     pi,
-    sqrt,
     log2,
     isclose,
-    acos,
     radians
 )
-
 
 
 # Addon Utils
@@ -241,8 +239,10 @@ class EventHandlers:
             _self.enum_camera_type, 
             (
                 _self.float_distance_offset - target_dim.length * 1.5,
-                _self.float_distance_offset + target_dim.length * 1.5
-            )
+                _self.float_distance_offset + target_dim.length * 1.5,
+            ),
+            _self.float_camera_field_of_view,
+            _self.float_camera_ortho_scale
         )
 
         angle = (_self.int_camera_rotation_preview/_self.int_camera_rotation_increment_limit) * 2 * pi
@@ -290,10 +290,14 @@ class Subroutine:
         )
         camera_object.rotation_euler.rotate_axis('Z', roll)
 
-    def setCameraIntrinsic(camera_object: BObject, camera_type: str, camera_clipping_limit: tuple):
+    def setCameraIntrinsic(camera_object: BObject, camera_type: str, camera_clipping_limit: tuple, camera_fov: float, camera_ortho_scale: float):
         camera_object.data.type = camera_type
         camera_object.data.clip_start = max(10e-8, camera_clipping_limit[0])
         camera_object.data.clip_end = max(10e-8, camera_clipping_limit[1])
+        if camera_type == 'ORTHO':
+            camera_object.data.ortho_scale = camera_ortho_scale
+        elif camera_type == 'PERSP':
+            camera_object.data.angle = camera_fov
 
 
 # Addon Properties
@@ -323,6 +327,46 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         default=False,
         update=lambda a, b: ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera'))
         )
+
+    bool_copy_target_local_transformation: BoolProperty(
+        name='Copy Target Transformation',
+        description = 'Spawn camera and copy target local transformation, if unselected then helper will follow global rotation.',
+        default=False,
+        )
+
+    float_camera_ortho_scale: FloatProperty(
+        name='Ortho Scale', 
+        description = 'Orthographic Scale',
+        default=3.4,
+        min=.0, 
+        precision=3,
+        subtype='UNSIGNED',
+        update=EventHandlers.camUpdateCallback
+        )
+
+    # float_camera_focal_length: FloatProperty(
+    #     name='Focal Length', 
+    #     description = 'Perspective Focal Length',
+    #     default=75.0,
+    #     min=1, 
+    #     precision=1,
+    #     subtype='UNSIGNED',
+    #     unit='CAMERA',
+    #     update=EventHandlers.camUpdateCallback
+    #     )
+
+    float_camera_field_of_view: FloatProperty(
+        name='Field of View', 
+        description = 'Perspective Field of View',
+        default=radians(39.6),
+        min=radians(.367),
+        max=radians(173),
+        precision=3,
+        subtype='UNSIGNED',
+        unit='ROTATION',
+        update=EventHandlers.camUpdateCallback
+        )
+
 
     enum_camera_type: EnumProperty(
         name='Type', 
@@ -462,6 +506,9 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
         Utils.bAssertObjectMode(context)
 
         coord, dim, rot = ObjectUtils.uDecomposeObjectBboxDimension(target_object)
+
+        if not addon_prop.bool_copy_target_local_transformation:
+            rot = Euler((0,0,0))
 
         ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
 
@@ -623,14 +670,14 @@ class SPRSHTT_Panel_baseProps:
     bl_region_type  = 'WINDOW'
     bl_context      = 'render'
 
-class SPRSHTT_PT_render_panel(SPRSHTT_Panel_baseProps, bpy.types.Panel):
+class SPRSHTT_PT_render_panel(SPRSHTT_Panel_baseProps, Panel):
     bl_label        = '< Sprite Sheet Toolkit >'
     bl_options      = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         pass
 
-class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
+class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, Panel):
     bl_label = "Addon Settings"
     bl_parent_id = "SPRSHTT_PT_render_panel"
 
@@ -644,7 +691,8 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         col.prop(addon_prop, 'collection_target_objects' )
 
         subcol = col.column()
-        subcol.enabled = bool(addon_prop.collection_target_objects) 
+        subcol.enabled = bool(addon_prop.collection_target_objects)
+        subcol.prop(addon_prop, 'bool_copy_target_local_transformation')
         subcol.operator('object.sprshtt_create_helper_object', text='Spawn Target Helper')
 
         subcol = col.column()
@@ -655,7 +703,13 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subcol.enabled = not addon_prop.bool_existing_camera
         subcol.prop(addon_prop, 'enum_camera_type')
 
+        if addon_prop.enum_camera_type == 'PERSP':
+            subcol.prop(addon_prop, 'float_camera_field_of_view')
+        elif addon_prop.enum_camera_type == 'ORTHO':
+            subcol.prop(addon_prop, 'float_camera_ortho_scale')
+
         subrow = subcol.row(align=True)
+        subcol.enabled = bool(addon_prop.collection_target_objects)
         subrow.prop(addon_prop, 'float_camera_angle_pitch')
         subrow.prop(addon_prop, 'float_camera_angle_yaw')
         subrow.prop(addon_prop, 'float_camera_angle_roll')
@@ -666,7 +720,7 @@ class SPRSHTT_PT_render_panel_addon(SPRSHTT_Panel_baseProps, bpy.types.Panel):
         subcol.operator('object.sprshtt_create_camera', text='Spawn Camera')
 
 
-class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel):
+class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, Panel):
     bl_label = "Renderer Settings"
     bl_parent_id = "SPRSHTT_PT_render_panel"
 
@@ -686,7 +740,7 @@ class SPRSHTT_PT_render_panel_renderer(SPRSHTT_Panel_baseProps, bpy.types.Panel)
         if addon_prop.bool_frame_skip:
             subcol.prop(addon_prop, 'int_frame_skip')
 
-class SPRSHTT_PT_render_panel_output(SPRSHTT_Panel_baseProps, bpy.types.Panel):
+class SPRSHTT_PT_render_panel_output(SPRSHTT_Panel_baseProps, Panel):
     bl_label = "Output Preference"
     bl_parent_id = "SPRSHTT_PT_render_panel"
 
