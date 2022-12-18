@@ -95,6 +95,7 @@ class Utils:
         n = n % n_range
         return min_v + n
 
+
 class ObjectUtils:
     addon_object_default_prefix = '||sprshtt_addon_object_' 
 
@@ -203,9 +204,6 @@ class ObjectUtils:
         Utils.loadSelectedObjectState(bpy.context)
         return obj
 
-    @staticmethod
-    def fAngleBetweenVector(src_vector: Vector, dst_vector: Vector):
-        return acos((dst_vector.dot(src_vector))/(src_vector.length*dst_vector.length))
 
 class EventHandlers:
 
@@ -262,6 +260,7 @@ class EventHandlers:
             Utils.iWrapAround(_self.int_camera_rotation_preview, 0, _self.int_camera_rotation_increment_limit)
         EventHandlers.camUpdateCallback(_self, context)
 
+    @staticmethod
     def frameSkipUpdateCallback(_self, context):
         scene = context.scene
         addon_prop = scene.sprshtt_properties
@@ -350,6 +349,13 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         update=EventHandlers.frameSkipUpdateCallback
         )
 
+    # Todo:
+    # fvec_camera_yaw_pitch_roll: FloatVectorProperty(
+    #     name='Yaw Pitch Roll', 
+    #     default=(0.0, radians(57.3), 0.0), 
+    #     unit='ROTATION'
+    #     )
+
     float_camera_angle_pitch: FloatProperty(
         name='Pitch', 
         description = 'Camera Pitch',
@@ -422,20 +428,6 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         default=False,
         )
 
-    fvec_camera_target_pos_offset: FloatVectorProperty(
-        name='Target Position Offset', 
-        description='Camera target offset relative to center of mass of target/selected object', 
-        default=(0.0, 0.0, 0.0),  
-        unit='LENGTH'
-        )
-
-    fvec_camera_target_rot_offset: FloatVectorProperty(
-        name='Tilt Offset', 
-        description='Camera target tilt relative to normal up-direction of target/selected object', 
-        default=(0.0, 0.0, 0.0), 
-        unit='ROTATION'
-        )
-
     collection_target_objects: PointerProperty(
         type=bpy.types.Object, 
         poll=lambda s, x: x.type == 'MESH',
@@ -497,6 +489,7 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
 
         return {'FINISHED'}
 
+
 class SPRSHTT_OP_CreateCamera(Operator):
     """ Create custom camera """
     bl_idname = 'object.sprshtt_create_camera'
@@ -542,13 +535,13 @@ class SPRSHTT_OP_CreateCamera(Operator):
 
         return {'FINISHED'}
 
+
 class SPRSHTT_OP_DeleteAllAddonObjects(Operator):
     bl_idname = 'object.sprshtt_delete_addon_objects'
     bl_label = "Delete All SPRSHTT Addon Object"
     def execute(self, context):
         ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
         return {'FINISHED'}
-
 
 
 class SPRSHTT_OP_Render(Operator):
@@ -569,6 +562,7 @@ class SPRSHTT_OP_Render(Operator):
         render_file_suffix = addon_prop.str_file_suffix
         render_file_format = scene.render.image_settings.file_format
         render_fp = abspath(scene.render.filepath)
+        render_fp = native_pathsep(render_fp)
 
         bitmap_file_formats = ['PNG', 'BMP', 'JPEG', 'JPEG2000', 'TARGA', 'TARGA_RAW', 'IRIS']
         if render_file_format not in bitmap_file_formats:
@@ -577,7 +571,6 @@ class SPRSHTT_OP_Render(Operator):
 
         if not render_file_suffix:
             render_file_suffix = target_name
-
         render_file_suffix = clean_name(render_file_suffix)
 
         if render_subfolder:
@@ -594,22 +587,27 @@ class SPRSHTT_OP_Render(Operator):
         if not addon_prop.bool_frame_skip:
             frame_skip = 1
 
-            render_subsubfolder = os.path.join(render_fp, render_file_suffix)
-            if not os.path.isdir(render_subsubfolder):
-                os.mkdir(render_subsubfolder)
-                self.report({'INFO'}, f'Created new folder {render_subsubfolder}')
+        render_sub_sub_folder = os.path.join(render_fp, render_file_suffix)
+        if not os.path.isdir(render_sub_sub_folder):
+            os.mkdir(render_sub_sub_folder)
+            self.report({'INFO'}, f'Created new folder {render_sub_sub_folder}')
         
-        for increment in range(addon_prop.int_camera_rotation_increment_limit):
-            addon_prop.int_camera_rotation_preview = increment
+        for inc in range(addon_prop.int_camera_rotation_increment_limit):
+            addon_prop.int_camera_rotation_preview = inc
+            curr_angle = inc*360//addon_prop.int_camera_rotation_increment_limit
+
+            render_sub_sub_sub_folder = os.path.join(render_sub_sub_folder, f'd{curr_angle:03}_{render_file_suffix}')
+
+            if not os.path.isdir(render_sub_sub_sub_folder):
+                os.mkdir(render_sub_sub_sub_folder)
+                self.report({'INFO'}, f'Created new folder {render_sub_sub_sub_folder}')
+
             frame = frame_start
-            curr_angle = int(increment*360/addon_prop.int_camera_rotation_increment_limit)
             while frame < frame_end:
-                if frame > frame_end:
-                    break
                 scene.frame_current = frame
                 frame += frame_skip
-                filename = f'd{curr_angle*360:03}_{frame:06}.{render_file_format.lower()}'
-                Utils.renderToPath(context, render_subsubfolder, filename)
+                filename = f'f{frame:06}.{render_file_format.lower()}'
+                Utils.renderToPath(context, render_sub_sub_sub_folder, filename)
 
         return {'FINISHED'}
 
