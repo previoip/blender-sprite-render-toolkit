@@ -290,6 +290,7 @@ class Subroutine:
         )
         camera_object.rotation_euler.rotate_axis('Z', roll)
 
+    @staticmethod
     def setCameraIntrinsic(camera_object: BObject, camera_type: str, camera_clipping_limit: tuple, camera_fov: float, camera_ortho_scale: float):
         camera_object.data.type = camera_type
         camera_object.data.clip_start = max(10e-8, camera_clipping_limit[0])
