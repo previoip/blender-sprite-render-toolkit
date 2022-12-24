@@ -69,7 +69,7 @@ def b_assert_object_mode(context, strict=True):
     return True
 
 
-def i_wrap_around_number(n, min_v, max_v):
+def i_wrap_overflow(n, min_v, max_v):
     n_range = max_v - min_v
     n = n % n_range
     return min_v + n
@@ -222,7 +222,7 @@ def void_callback_on_increment_prop_update(_self, context):
     addon_prop = scene.sprshtt_properties
 
     addon_prop['int_camera_rotation_preview'] = \
-        i_wrap_around_number(_self.int_camera_rotation_preview, 0, _self.int_camera_rotation_increment_limit)
+        i_wrap_overflow(_self.int_camera_rotation_preview, 0, _self.int_camera_rotation_increment_limit)
     void_callback_on_camera_update(_self, context)
 
 def void_callback_on_frame_skip_prop_update(_self, context):
@@ -267,7 +267,7 @@ class ObjectSelectionStateSaver:
     def void_save_context_selection_state(context):
         if not b_assert_object_mode(context, strict=False):
             return
-        ObjectSelectionStateSaver._selections = context.selected_objects
+        ObjectSelectionStateSaver._selections = context.selected_objects.copy()
 
     @staticmethod
     def void_load_context_selection_state(context):
@@ -277,7 +277,7 @@ class ObjectSelectionStateSaver:
             for o in ObjectSelectionStateSaver._selections:
                 o.select_set(state=True)
             context.view_layer.objects.active = ObjectSelectionStateSaver._selections[0]
-            ObjectSelectionStateSaver._selections = None
+            ObjectSelectionStateSaver._selections.clear()
 
 # Addon Properties
 
