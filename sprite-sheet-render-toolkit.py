@@ -12,6 +12,7 @@ bl_info = {
 
 import bpy
 import os
+import sys
 from random import getrandbits
 from bpy.types import (
     Scene,
@@ -24,7 +25,6 @@ from bpy.props import (
     BoolProperty,
     IntProperty,
     FloatProperty,
-    FloatVectorProperty,
     StringProperty,
     EnumProperty,
     PointerProperty
@@ -48,258 +48,236 @@ from math import (
 )
 
 
-# Addon Utils
+ADDON_OBJECT_PREFIX = '||sprshtt_addon_object_'
 
-class Utils:
-    addon_previously_selected = None
+# Addon Functionalities
+
+def render_to_path(context, target_filepath :str, target_filename: str):
+    """ Renders scene onto designated path and filename """
+    curr_filepath = str(context.scene.render.filepath)
+    target_filepath = os.path.join(target_filepath, target_filename)
+    context.scene.render.filepath = target_filepath
+    bpy.ops.render.render(write_still=True)
+    context.scene.render.filepath = curr_filepath
+
+def b_assert_object_mode(context, strict=True):
+    if context.active_object and not context.active_object.mode == 'OBJECT':
+        if not strict:
+            return False
+        print(f'WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
+        bpy.ops.object.mode_set(mode='OBJECT')
+    return True
+
+
+def i_wrap_around_number(n, min_v, max_v):
+    n_range = max_v - min_v
+    n = n % n_range
+    return min_v + n
+
+def s_get_addon_object_prefix(mid:str = '') -> str:
+    if mid:
+        return ADDON_OBJECT_PREFIX + mid + '_'
+    return str(ADDON_OBJECT_PREFIX)
+
+def b_check_scene_has_object_name(prefix: str) -> bool:
+    """ Checks if blender data.objects has object with prefix """
+    for item in bpy.data.objects.keys():
+        if item.startswith(prefix):
+            return True
+    return False    
+
+def ls_object_with_prefix(prefix: str) -> list:
+    """ Queries and returns all object that has prefix """
+    ls = []
+    for item in bpy.data.objects.keys():
+        if item.startswith(prefix):
+            ls.append(bpy.data.objects[item])
+    return ls
+
+def void_delete_objects_from_scene(objs: list):
+    """ Deletes objects data from scene """
+    if objs:
+        for obj in objs:
+            bpy.data.objects.remove(obj, do_unlink=True) 
+
+def void_delete_objects_with_prefix(prefix: str):
+    void_delete_objects_from_scene(ls_object_with_prefix(prefix))
+
+def s_gen_rand_addon_name(mid: str = '') -> str:
+    """ Generates unique object name with predefined prefix """
+    while True:
+        name = s_get_addon_object_prefix(mid)
+        name += '%08x' % getrandbits(32)
+        if not b_check_scene_has_object_name(name):
+            return name
+
+def var_decompose_object_bbox_dim(obj: BObject):
+    """ Calculates relative bounding box dimension """
+    rot = obj.rotation_euler.copy()
+    dim = obj.dimensions.to_3d()
+    corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    x, y, z = [ [ c[i] for c in corners ] for i in range(3) ]
+    fcenter = lambda x: ( max(x) + min(x) ) / 2
+    center = [ fcenter(axis) for axis in [x,y,z] ]
+    return Vector(center), dim, rot
+
+def void_move_object_along_vector(obj: BObject, vec=(0,0,1), offset: float = 0.0):
+    if not isinstance(vec, Vector):
+        vec = Vector(vec)
+    if isclose(offset, 0):
+        return obj
+    vec_offset = vec * offset
+
+    # personal side note: 
+    # using matrix world for relative transformation yields some side
+    # effect where past rotation transformation is preserved throughout.
+    # This causes the cross-product below to deviates in the wrong 
+    # direction, a frustrating bug to find.
+    # One solution is to recalc world matrix using C.view_layer.update
+    # but for various reason this is also to be avoided since its 
+    # relatively heavy operation. 
+
+    # Thus in this implementation a simple bounce back transformation
+    # to world origin and apply the translation that way.
+
+    # bpy.context.view_layer.update()
+    # mat_inv = obj.matrix_world.copy()
+    # mat_inv.invert()
+    # obj.location += vec_offset @ mat_inv
+
+    last_pos = obj.location.copy()
+    obj.location -= last_pos
+    obj.location += vec_offset
+    obj.location += last_pos
+    return obj
+
+def void_pivot_object_along_target_locals(obj: BObject, pivot_obj: BObject, pivot_axis_enum, offset_angle: float):
+    if pivot_axis_enum not in ['X', 'Y', 'Z']:
+        return obj
+    if isclose(offset_angle, 0):
+        return obj
+    b_assert_object_mode(bpy.context, strict=True)
+    ObjectSelectionStateSaver.void_save_context_selection_state(bpy.context)
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(state=True)
+    pivot_obj.select_set(state=True)
+    bpy.context.view_layer.objects.active = pivot_obj
+    bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
+    pivot_obj.rotation_euler.rotate_axis(pivot_axis_enum, offset_angle)
+    bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
+    bpy.ops.object.select_all(action='DESELECT')
+    pivot_obj.rotation_euler.rotate_axis(pivot_axis_enum, -offset_angle)
+    ObjectSelectionStateSaver.void_load_context_selection_state(bpy.context)
+    return obj
+
+
+# Event Handlers
+
+def void_callback_on_counter_update(_self, context):
+    if _self.int_camera_rotation_increment_limit <= _self.int_camera_rotation_preview:
+        _self.int_camera_rotation_preview = _self.int_camera_rotation_increment_limit - 1
+    void_callback_on_increment_prop_update(_self, context)
+
+def void_callback_on_camera_update(_self, context):
+    camera_object = _self.collection_target_cameras
+    target_object = _self.collection_target_objects
+    _, target_dim, _  = var_decompose_object_bbox_dim(target_object)
+
+    if not camera_object or not target_object:
+        return
+    if not b_assert_object_mode(context, strict=False):
+        return
+    if not b_check_scene_has_object_name(s_get_addon_object_prefix('axis-helper-arrow')):
+        return
+    helper_object = ls_object_with_prefix(s_get_addon_object_prefix('axis-helper-arrow'))[0]
+
+    loc, _, rot = var_decompose_object_bbox_dim(helper_object)
+    void_prop_setter_camera_transformation(
+        camera_object, 
+        loc, 
+        rot, 
+        Vector((_self.float_distance_offset,0,0)), 
+        Euler((_self.float_camera_angle_pitch, _self.float_camera_angle_roll, _self.float_camera_angle_yaw))
+    )
+
+    void_prop_setter_camera_intrinsic(
+        camera_object, 
+        _self.enum_camera_type, 
+        (
+            _self.float_distance_offset - target_dim.length * 1.5,
+            _self.float_distance_offset + target_dim.length * 1.5,
+        ),
+        _self.float_camera_field_of_view,
+        _self.float_camera_ortho_scale
+    )
+
+    angle = (_self.int_camera_rotation_preview/_self.int_camera_rotation_increment_limit) * 2 * pi
+    void_pivot_object_along_target_locals(camera_object, helper_object, 'Z', angle)
+
+def void_callback_on_increment_prop_update(_self, context):
+    # side note:
+    # updating the value directly from context->scene->prop will call the setter event on the attr instead,
+    # thus this will not trigger update event on _self and cause infinite recursion!
+    scene = context.scene
+    addon_prop = scene.sprshtt_properties
+
+    addon_prop['int_camera_rotation_preview'] = \
+        i_wrap_around_number(_self.int_camera_rotation_preview, 0, _self.int_camera_rotation_increment_limit)
+    void_callback_on_camera_update(_self, context)
+
+def void_callback_on_frame_skip_prop_update(_self, context):
+    scene = context.scene
+    addon_prop = scene.sprshtt_properties
+
+    frame_start = scene.frame_start
+    frame_end = scene.frame_end
+    frame_range = frame_end - frame_start
+    frame_skip = addon_prop.int_frame_skip
+    addon_prop['int_frame_skip'] = min(frame_range, frame_skip)
+
+def void_prop_setter_camera_transformation(camera_object: BObject, location: Vector, rotation: Euler, location_offset: Vector, yaw_pitch_roll: Euler):
+    camera_object.location = location
+    roll = yaw_pitch_roll.y
+    yaw_pitch_roll = Euler((pi/2 - yaw_pitch_roll.x, 0, pi/2 + yaw_pitch_roll.z))
+    rotation = (rotation.to_matrix() @ yaw_pitch_roll.to_matrix()).to_euler(camera_object.rotation_mode)
+    camera_object.rotation_euler = rotation
+    up_vec = Vector((0,0,1))
+    up_vec.rotate(rotation)
+    void_move_object_along_vector(
+        camera_object, 
+        up_vec,
+        location_offset.length
+    )
+    camera_object.rotation_euler.rotate_axis('Z', roll)
+
+def void_prop_setter_camera_intrinsic(camera_object: BObject, camera_type: str, camera_clipping_limit: tuple, camera_fov: float, camera_ortho_scale: float):
+    camera_object.data.type = camera_type
+    camera_object.data.clip_start = max(10e-8, camera_clipping_limit[0])
+    camera_object.data.clip_end = max(10e-8, camera_clipping_limit[1])
+    if camera_type == 'ORTHO':
+        camera_object.data.ortho_scale = camera_ortho_scale
+    elif camera_type == 'PERSP':
+        camera_object.data.angle = camera_fov
+
+
+class ObjectSelectionStateSaver:
+    _selections = []
 
     @staticmethod
-    def renderToPath(context, target_filepath :str, target_filename: str):
-        """ Renders scene onto designated path and filename """
-        curr_filepath = str(context.scene.render.filepath)
-        target_filepath = os.path.join(target_filepath, target_filename)
-        context.scene.render.filepath = target_filepath
-        bpy.ops.render.render(write_still=True)
-        context.scene.render.filepath = curr_filepath
-
-    @staticmethod
-    def bAssertObjectMode(context, strict=True):
-        if context.active_object and not context.active_object.mode == 'OBJECT':
-            if not strict:
-                return False
-            print(f'WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
-            bpy.ops.object.mode_set(mode='OBJECT')
-        return True
-
-    @staticmethod
-    def saveSelectedObjectState(context):
-        if not Utils.bAssertObjectMode(context, strict=False):
+    def void_save_context_selection_state(context):
+        if not b_assert_object_mode(context, strict=False):
             return
-        Utils.addon_previously_selected = context.selected_objects
+        ObjectSelectionStateSaver._selections = context.selected_objects
 
     @staticmethod
-    def loadSelectedObjectState(context):
-        if not Utils.bAssertObjectMode(context, strict=False):
+    def void_load_context_selection_state(context):
+        if not b_assert_object_mode(context, strict=False):
             return
-        if Utils.addon_previously_selected:
-            for o in Utils.addon_previously_selected:
+        if ObjectSelectionStateSaver._selections:
+            for o in ObjectSelectionStateSaver._selections:
                 o.select_set(state=True)
-            context.view_layer.objects.active = Utils.addon_previously_selected[0]
-            Utils.addon_previously_selected = None
-
-    @staticmethod
-    def iWrapAround(n, min_v, max_v):
-        n_range = max_v - min_v
-        n = n % n_range
-        return min_v + n
-
-
-class ObjectUtils:
-    addon_object_default_prefix = '||sprshtt_addon_object_' 
-
-    @staticmethod
-    def sGetDefaultPrefix(mid:str = '') -> str:
-        if mid:
-            return ObjectUtils.addon_object_default_prefix + mid + '_'
-        return str(ObjectUtils.addon_object_default_prefix)
-
-    @staticmethod
-    def bBObjectsHasPrefix(prefix: str) -> bool:
-        """ Checks if blender data.objects has object with prefix """
-        for item in bpy.data.objects.keys():
-            if item.startswith(prefix):
-                return True
-        return False    
-
-    @staticmethod
-    def qAllBObjectsWithPrefix(prefix: str) -> list:
-        """ Queries and returns all object that has prefix """
-        ls = []
-        for item in bpy.data.objects.keys():
-            if item.startswith(prefix):
-                ls.append(bpy.data.objects[item])
-        return ls
-
-    @staticmethod
-    def deleteObjectsFromScene(objs: list):
-        """ Deletes objects data from scene """
-        if objs:
-            for obj in objs:
-                bpy.data.objects.remove(obj, do_unlink=True) 
-    
-    @staticmethod
-    def deleteObjectsWithPrefix(prefix: str):
-        ObjectUtils.deleteObjectsFromScene(ObjectUtils.qAllBObjectsWithPrefix(prefix))
-
-    @staticmethod
-    def sGenerateUniqueObjectName(mid: str = '') -> str:
-        """ Generates unique object name with predefined prefix """
-        while True:
-            name = ObjectUtils.sGetDefaultPrefix(mid)
-            name += '%08x' % getrandbits(32)
-            if not ObjectUtils.bBObjectsHasPrefix(name):
-                return name
-
-    @staticmethod
-    def uDecomposeObjectBboxDimension(obj: BObject):
-        """ Calculates relative bounding box dimension """
-        rot = obj.rotation_euler.copy()
-        dim = obj.dimensions.to_3d()
-        corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
-        x, y, z = [ [ c[i] for c in corners ] for i in range(3) ]
-        fcenter = lambda x: ( max(x) + min(x) ) / 2
-        center = [ fcenter(axis) for axis in [x,y,z] ]
-        return Vector(center), dim, rot
-
-    @staticmethod
-    def uMoveObjectAlongVector(obj: BObject, vec=(0,0,1), offset: float = 0.0):
-        if not isinstance(vec, Vector):
-            vec = Vector(vec)
-        if isclose(offset, 0):
-            return obj
-        vec_offset = vec * offset
-
-        # personal side note: 
-        # using matrix world for relative transformation yields some side
-        # effect where past rotation transformation is preserved throughout.
-        # This causes the cross-product below to deviates in the wrong 
-        # direction, a frustrating bug to find.
-        # One solution is to recalc world matrix using C.view_layer.update
-        # but for various reason this is also to be avoided since its 
-        # relatively heavy operation. 
-
-        # Thus in this implementation a simple bounce back transformation
-        # to world origin and apply the translation that way.
-
-        # bpy.context.view_layer.update()
-        # mat_inv = obj.matrix_world.copy()
-        # mat_inv.invert()
-        # obj.location += vec_offset @ mat_inv
-
-        last_pos = obj.location.copy()
-        obj.location -= last_pos
-        obj.location += vec_offset
-        obj.location += last_pos
-        return obj
-
-    @staticmethod
-    def uPivotObjectAlongTargetLocalAxis(obj: BObject, pivot_obj: BObject, pivot_axis_enum, offset_angle: float):
-        if pivot_axis_enum not in ['X', 'Y', 'Z']:
-            return obj
-        if isclose(offset_angle, 0):
-            return obj
-        Utils.bAssertObjectMode(bpy.context, strict=True)
-        Utils.saveSelectedObjectState(bpy.context)
-        bpy.ops.object.select_all(action='DESELECT')
-        obj.select_set(state=True)
-        pivot_obj.select_set(state=True)
-        bpy.context.view_layer.objects.active = pivot_obj
-        bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
-        pivot_obj.rotation_euler.rotate_axis(pivot_axis_enum, offset_angle)
-        bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
-        bpy.ops.object.select_all(action='DESELECT')
-        pivot_obj.rotation_euler.rotate_axis(pivot_axis_enum, -offset_angle)
-        Utils.loadSelectedObjectState(bpy.context)
-        return obj
-
-
-class EventHandlers:
-
-    @staticmethod
-    def camRotationCounterCallback(_self, context):
-        if _self.int_camera_rotation_increment_limit <= _self.int_camera_rotation_preview:
-            _self.int_camera_rotation_preview = _self.int_camera_rotation_increment_limit - 1
-        EventHandlers.camIncrUpdateCallback(_self, context)
-
-    @staticmethod
-    def camUpdateCallback(_self, context):
-        camera_object = _self.collection_target_cameras
-        target_object = _self.collection_target_objects
-        _, target_dim, _  = ObjectUtils.uDecomposeObjectBboxDimension(target_object)
-
-        if not camera_object or not target_object:
-            return
-        if not Utils.bAssertObjectMode(context, strict=False):
-            return
-        if not ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow')):
-            return
-        helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
-
-        loc, _, rot = ObjectUtils.uDecomposeObjectBboxDimension(helper_object)
-        Subroutine.setCameraTransformation(
-            camera_object, 
-            loc, 
-            rot, 
-            Vector((_self.float_distance_offset,0,0)), 
-            Euler((_self.float_camera_angle_pitch, _self.float_camera_angle_roll, _self.float_camera_angle_yaw))
-        )
-
-        Subroutine.setCameraIntrinsic(
-            camera_object, 
-            _self.enum_camera_type, 
-            (
-                _self.float_distance_offset - target_dim.length * 1.5,
-                _self.float_distance_offset + target_dim.length * 1.5,
-            ),
-            _self.float_camera_field_of_view,
-            _self.float_camera_ortho_scale
-        )
-
-        angle = (_self.int_camera_rotation_preview/_self.int_camera_rotation_increment_limit) * 2 * pi
-        ObjectUtils.uPivotObjectAlongTargetLocalAxis(camera_object, helper_object, 'Z', angle)
-
-    @staticmethod
-    def camIncrUpdateCallback(_self, context):
-        # side note:
-        # updating the value directly from context->scene->prop will call the setter event on the attr instead,
-        # thus this will not trigger update event on _self and cause infinite recursion!
-        scene = context.scene
-        addon_prop = scene.sprshtt_properties
-
-        addon_prop['int_camera_rotation_preview'] = \
-            Utils.iWrapAround(_self.int_camera_rotation_preview, 0, _self.int_camera_rotation_increment_limit)
-        EventHandlers.camUpdateCallback(_self, context)
-
-    @staticmethod
-    def frameSkipUpdateCallback(_self, context):
-        scene = context.scene
-        addon_prop = scene.sprshtt_properties
-
-        frame_start = scene.frame_start
-        frame_end = scene.frame_end
-        frame_range = frame_end - frame_start
-        frame_skip = addon_prop.int_frame_skip
-        addon_prop['int_frame_skip'] = min(frame_range, frame_skip)
-
-
-class Subroutine:
-    
-    @staticmethod
-    def setCameraTransformation(camera_object: BObject, location: Vector, rotation: Euler, location_offset: Vector, yaw_pitch_roll: Euler):
-        camera_object.location = location
-        roll = yaw_pitch_roll.y
-        yaw_pitch_roll = Euler((pi/2 - yaw_pitch_roll.x, 0, pi/2 + yaw_pitch_roll.z))
-        rotation = (rotation.to_matrix() @ yaw_pitch_roll.to_matrix()).to_euler(camera_object.rotation_mode)
-        camera_object.rotation_euler = rotation
-        up_vec = Vector((0,0,1))
-        up_vec.rotate(rotation)
-        ObjectUtils.uMoveObjectAlongVector(
-            camera_object, 
-            up_vec,
-            location_offset.length
-        )
-        camera_object.rotation_euler.rotate_axis('Z', roll)
-
-    @staticmethod
-    def setCameraIntrinsic(camera_object: BObject, camera_type: str, camera_clipping_limit: tuple, camera_fov: float, camera_ortho_scale: float):
-        camera_object.data.type = camera_type
-        camera_object.data.clip_start = max(10e-8, camera_clipping_limit[0])
-        camera_object.data.clip_end = max(10e-8, camera_clipping_limit[1])
-        if camera_type == 'ORTHO':
-            camera_object.data.ortho_scale = camera_ortho_scale
-        elif camera_type == 'PERSP':
-            camera_object.data.angle = camera_fov
-
+            context.view_layer.objects.active = ObjectSelectionStateSaver._selections[0]
+            ObjectSelectionStateSaver._selections = None
 
 # Addon Properties
 
@@ -326,7 +304,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         name='Use Existing Camera',
         description = 'Use existing camera instead of generated from these settings',
         default=False,
-        update=lambda a, b: ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera'))
+        update=lambda a, b: void_delete_objects_with_prefix(s_get_addon_object_prefix('camera'))
         )
 
     bool_copy_target_local_transformation: BoolProperty(
@@ -342,7 +320,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         min=.0, 
         precision=3,
         subtype='UNSIGNED',
-        update=EventHandlers.camUpdateCallback
+        update=void_callback_on_camera_update
         )
 
     # float_camera_focal_length: FloatProperty(
@@ -353,7 +331,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     #     precision=1,
     #     subtype='UNSIGNED',
     #     unit='CAMERA',
-    #     update=EventHandlers.camUpdateCallback
+    #     update=void_callback_on_camera_update
     #     )
 
     float_camera_field_of_view: FloatProperty(
@@ -365,7 +343,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         precision=3,
         subtype='UNSIGNED',
         unit='ROTATION',
-        update=EventHandlers.camUpdateCallback
+        update=void_callback_on_camera_update
         )
 
 
@@ -377,7 +355,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
             ("PERSP", "Perspective", "", 2),
         ],
         default="ORTHO",
-        update=EventHandlers.camUpdateCallback
+        update=void_callback_on_camera_update
         )
 
     bool_frame_skip: BoolProperty(
@@ -391,7 +369,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         default=10, 
         min=1, 
         soft_max=1000,
-        update=EventHandlers.frameSkipUpdateCallback
+        update=void_callback_on_frame_skip_prop_update
         )
 
     # Todo:
@@ -409,7 +387,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         max=pi, 
         precision=2,
         subtype='ANGLE',
-        update=EventHandlers.camUpdateCallback
+        update=void_callback_on_camera_update
         )
 
     float_camera_angle_yaw: FloatProperty(
@@ -420,7 +398,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         max=pi,
         precision=2,
         subtype='ANGLE',
-        update=EventHandlers.camUpdateCallback
+        update=void_callback_on_camera_update
         )
 
     float_camera_angle_roll: FloatProperty(
@@ -431,7 +409,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         max=pi,
         precision=2,
         subtype='ANGLE',
-        update=EventHandlers.camUpdateCallback
+        update=void_callback_on_camera_update
         )
 
 
@@ -442,7 +420,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         min=1, 
         soft_max=36,
         max=99,
-        update=EventHandlers.camRotationCounterCallback
+        update=void_callback_on_counter_update
         )
 
     int_camera_rotation_preview: IntProperty(
@@ -450,7 +428,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         min=0, 
         soft_max=36,
         max=99,
-        update=EventHandlers.camIncrUpdateCallback
+        update=void_callback_on_increment_prop_update
     )
 
     bool_auto_camera_offset: BoolProperty(
@@ -464,7 +442,7 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
         description = 'Camera distance offset to target reference',
         min=0,
         default=20,
-        update=EventHandlers.camUpdateCallback
+        update=void_callback_on_camera_update
         )
 
     bool_auto_camera_scale: BoolProperty(
@@ -487,7 +465,6 @@ class SPRSHTT_PropertyGroup(PropertyGroup):
     
     # additional 'private' property as extra value container
     private_str_target_obj_name: StringProperty()
-    private_float_target_obj_dimension: FloatVectorProperty()
 
 
 # Addon Operators
@@ -504,18 +481,18 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
         if not target_object:
             return {'CANCELLED'}
 
-        Utils.bAssertObjectMode(context)
+        b_assert_object_mode(context)
 
-        coord, dim, rot = ObjectUtils.uDecomposeObjectBboxDimension(target_object)
+        coord, dim, rot = var_decompose_object_bbox_dim(target_object)
 
         if not addon_prop.bool_copy_target_local_transformation:
             rot = Euler((0,0,0))
 
-        ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
+        void_delete_objects_with_prefix(s_get_addon_object_prefix())
 
         bpy.ops.object.empty_add(type='SINGLE_ARROW', radius=dim.length, location=coord, rotation=rot)
         obj = bpy.context.selected_objects[0]
-        obj.name = ObjectUtils.sGenerateUniqueObjectName('axis-helper-arrow')
+        obj.name = s_gen_rand_addon_name('axis-helper-arrow')
         obj.empty_display_size = dim.length
         if abs(dim.z) <= 1: obj.empty_display_size = 1
 
@@ -523,7 +500,7 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
 
         bpy.ops.object.empty_add(type='CIRCLE', radius=dim.length, location=coord, rotation=rot)
         obj = bpy.context.selected_objects[0]
-        obj.name = ObjectUtils.sGenerateUniqueObjectName('axis-helper-circle')
+        obj.name = s_gen_rand_addon_name('axis-helper-circle')
         obj.empty_display_size = dim.length
         obj.show_axis = True
         if abs(dim.z) <= 1: obj.empty_display_size = 1
@@ -533,7 +510,6 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
         if target_object:
             target_object.select_set(True)
             addon_prop.private_str_target_obj_name = target_object.name
-        addon_prop.private_float_target_obj_dimension = dim
 
         return {'FINISHED'}
 
@@ -551,21 +527,21 @@ class SPRSHTT_OP_CreateCamera(Operator):
         if not target_object:
             return {'CANCELLED'}
 
-        Utils.bAssertObjectMode(context)
+        b_assert_object_mode(context)
 
-        if ObjectUtils.bBObjectsHasPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper')):
+        if b_check_scene_has_object_name(s_get_addon_object_prefix('axis-helper')):
             bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
 
         if addon_prop.bool_existing_camera:
-            context.scene.camera = ObjectUtils.qAllBObjectsWithPrefix('Camera')[0]
+            context.scene.camera = ls_object_with_prefix('Camera')[0]
             return {'FINISHED'}
 
-        ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('camera'))
-        helper_object = ObjectUtils.qAllBObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix('axis-helper-arrow'))[0]
+        void_delete_objects_with_prefix(s_get_addon_object_prefix('camera'))
+        helper_object = ls_object_with_prefix(s_get_addon_object_prefix('axis-helper-arrow'))[0]
 
         camera_offset = addon_prop.float_distance_offset
-        _, target_dim, _  = ObjectUtils.uDecomposeObjectBboxDimension(target_object)
-        loc, dim, rot = ObjectUtils.uDecomposeObjectBboxDimension(helper_object)
+        _, target_dim, _  = var_decompose_object_bbox_dim(target_object)
+        loc, dim, rot = var_decompose_object_bbox_dim(helper_object)
         if addon_prop.bool_auto_camera_offset:
             camera_offset = helper_object.empty_display_size + log2(target_dim.length + 1) * 8
         addon_prop.float_distance_offset = camera_offset
@@ -574,10 +550,10 @@ class SPRSHTT_OP_CreateCamera(Operator):
         obj = context.selected_objects[0]
         obj.data.show_sensor = True
         obj.data.show_limits = True
-        obj.name = ObjectUtils.sGenerateUniqueObjectName('camera')
+        obj.name = s_gen_rand_addon_name('camera')
         context.scene.camera = obj
         addon_prop.collection_target_cameras = obj
-        EventHandlers.camUpdateCallback(addon_prop, context)
+        void_callback_on_camera_update(addon_prop, context)
 
         addon_prop.int_camera_rotation_preview = 0
 
@@ -588,7 +564,7 @@ class SPRSHTT_OP_DeleteAllAddonObjects(Operator):
     bl_idname = 'object.sprshtt_delete_addon_objects'
     bl_label = "Delete All SPRSHTT Addon Object"
     def execute(self, context):
-        ObjectUtils.deleteObjectsWithPrefix(ObjectUtils.sGetDefaultPrefix())
+        void_delete_objects_with_prefix(s_get_addon_object_prefix())
         return {'FINISHED'}
 
 
@@ -655,7 +631,7 @@ class SPRSHTT_OP_Render(Operator):
                 scene.frame_current = frame
                 frame += frame_skip
                 filename = f'f{frame:06}.{render_file_format.lower()}'
-                Utils.renderToPath(context, render_sub_sub_sub_folder, filename)
+                render_to_path(context, render_sub_sub_sub_folder, filename)
 
         return {'FINISHED'}
 
