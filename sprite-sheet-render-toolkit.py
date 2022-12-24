@@ -60,14 +60,15 @@ def render_to_path(context, target_filepath :str, target_filename: str):
     bpy.ops.render.render(write_still=True)
     context.scene.render.filepath = curr_filepath
 
-def b_assert_object_mode(context, strict=True):
+def b_check_object_mode(context):
     if context.active_object and not context.active_object.mode == 'OBJECT':
-        if not strict:
-            return False
-        print(f'WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
-        bpy.ops.object.mode_set(mode='OBJECT')
+        return False
     return True
 
+def void_assert_object_mode(context):
+    if not b_check_object_mode(context=context):
+        print(f'WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
+        bpy.ops.object.mode_set(mode='OBJECT')
 
 def i_wrap_overflow(n, min_v, max_v):
     n_range = max_v - min_v
@@ -77,14 +78,22 @@ def i_wrap_overflow(n, min_v, max_v):
 def s_get_addon_object_prefix(mid:str = '') -> str:
     if mid:
         return ADDON_OBJECT_PREFIX + mid + '_'
-    return str(ADDON_OBJECT_PREFIX)
+    return ADDON_OBJECT_PREFIX
+
+def s_gen_rand_addon_name(mid: str = '') -> str:
+    """ Generates unique object name with predefined prefix """
+    while True:
+        name = s_get_addon_object_prefix(mid)
+        name += '%08x' % getrandbits(32)
+        if not b_check_scene_has_object_name(name):
+            return name
 
 def b_check_scene_has_object_name(prefix: str) -> bool:
     """ Checks if blender data.objects has object with prefix """
     for item in bpy.data.objects.keys():
         if item.startswith(prefix):
             return True
-    return False    
+    return False
 
 def ls_object_with_prefix(prefix: str) -> list:
     """ Queries and returns all object that has prefix """
@@ -102,14 +111,6 @@ def void_delete_objects_from_scene(objs: list):
 
 def void_delete_objects_with_prefix(prefix: str):
     void_delete_objects_from_scene(ls_object_with_prefix(prefix))
-
-def s_gen_rand_addon_name(mid: str = '') -> str:
-    """ Generates unique object name with predefined prefix """
-    while True:
-        name = s_get_addon_object_prefix(mid)
-        name += '%08x' % getrandbits(32)
-        if not b_check_scene_has_object_name(name):
-            return name
 
 def var_decompose_object_bbox_dim(obj: BObject):
     """ Calculates relative bounding box dimension """
@@ -156,7 +157,7 @@ def void_pivot_object_along_target_locals(obj: BObject, pivot_obj: BObject, pivo
         return obj
     if isclose(offset_angle, 0):
         return obj
-    b_assert_object_mode(bpy.context, strict=True)
+    void_assert_object_mode(bpy.context)
     ObjectSelectionStateSaver.void_save_context_selection_state(bpy.context)
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(state=True)
@@ -171,7 +172,7 @@ def void_pivot_object_along_target_locals(obj: BObject, pivot_obj: BObject, pivo
     return obj
 
 
-# Event Handlers
+# Property Event Handlers
 
 def void_callback_on_counter_update(_self, context):
     if _self.int_camera_rotation_increment_limit <= _self.int_camera_rotation_preview:
@@ -185,7 +186,7 @@ def void_callback_on_camera_update(_self, context):
 
     if not camera_object or not target_object:
         return
-    if not b_assert_object_mode(context, strict=False):
+    if not b_check_object_mode(context):
         return
     if not b_check_scene_has_object_name(s_get_addon_object_prefix('axis-helper-arrow')):
         return
@@ -265,13 +266,13 @@ class ObjectSelectionStateSaver:
 
     @staticmethod
     def void_save_context_selection_state(context):
-        if not b_assert_object_mode(context, strict=False):
+        if not b_check_object_mode(context):
             return
         ObjectSelectionStateSaver._selections = context.selected_objects.copy()
 
     @staticmethod
     def void_load_context_selection_state(context):
-        if not b_assert_object_mode(context, strict=False):
+        if not b_check_object_mode(context):
             return
         if ObjectSelectionStateSaver._selections:
             for o in ObjectSelectionStateSaver._selections:
@@ -481,7 +482,7 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
         if not target_object:
             return {'CANCELLED'}
 
-        b_assert_object_mode(context)
+        void_assert_object_mode(context)
 
         coord, dim, rot = var_decompose_object_bbox_dim(target_object)
 
@@ -527,7 +528,7 @@ class SPRSHTT_OP_CreateCamera(Operator):
         if not target_object:
             return {'CANCELLED'}
 
-        b_assert_object_mode(context)
+        void_assert_object_mode(context)
 
         if b_check_scene_has_object_name(s_get_addon_object_prefix('axis-helper')):
             bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
