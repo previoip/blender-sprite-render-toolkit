@@ -95,7 +95,7 @@ def b_check_scene_has_object_name(prefix: str) -> bool:
             return True
     return False
 
-def ls_object_with_prefix(prefix: str) -> list:
+def ls_objects_with_prefix(prefix: str) -> list:
     """ Queries and returns all object that has prefix """
     ls = []
     for item in bpy.data.objects.keys():
@@ -110,7 +110,7 @@ def void_delete_objects_from_scene(objs: list):
             bpy.data.objects.remove(obj, do_unlink=True) 
 
 def void_delete_objects_with_prefix(prefix: str):
-    void_delete_objects_from_scene(ls_object_with_prefix(prefix))
+    void_delete_objects_from_scene(ls_objects_with_prefix(prefix))
 
 def var_decompose_object_bbox_dim(obj: BObject):
     """ Calculates relative bounding box dimension """
@@ -190,7 +190,7 @@ def void_callback_on_camera_update(_self, context):
         return
     if not b_check_scene_has_object_name(s_get_addon_object_prefix('axis-helper-arrow')):
         return
-    helper_object = ls_object_with_prefix(s_get_addon_object_prefix('axis-helper-arrow'))[0]
+    helper_object = ls_objects_with_prefix(s_get_addon_object_prefix('axis-helper-arrow'))[0]
 
     loc, _, rot = var_decompose_object_bbox_dim(helper_object)
     void_prop_setter_camera_transformation(
@@ -534,11 +534,11 @@ class SPRSHTT_OP_CreateCamera(Operator):
             bpy.ops.object.sprshtt_create_helper_object('EXEC_DEFAULT') # recreate helper objects
 
         if addon_prop.bool_existing_camera:
-            context.scene.camera = ls_object_with_prefix('Camera')[0]
+            context.scene.camera = ls_objects_with_prefix('Camera')[0]
             return {'FINISHED'}
 
         void_delete_objects_with_prefix(s_get_addon_object_prefix('camera'))
-        helper_object = ls_object_with_prefix(s_get_addon_object_prefix('axis-helper-arrow'))[0]
+        helper_object = ls_objects_with_prefix(s_get_addon_object_prefix('axis-helper-arrow'))[0]
 
         camera_offset = addon_prop.float_distance_offset
         _, target_dim, _  = var_decompose_object_bbox_dim(target_object)
