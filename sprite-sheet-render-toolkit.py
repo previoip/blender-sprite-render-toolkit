@@ -4,9 +4,9 @@ bl_info = {
     "category": "Render",
     "support": "COMMUNITY",
     "author": "Previo Prakasa (github.com/previoip)",
-    "version": (0, 0, 2),
+    "version": (0, 0, 4),
     "location": "View3D > Properties > Render",
-    "description": "Render toolkit using camera manipulation for generating 2D sprite sheet from 3D assets.",
+    "description": "Render toolkit for generating 2D sprite sheet from 3D assets.",
     "warning": "This is an experimental project and should not be used in any form of production (as of today).",
 }
 
@@ -48,7 +48,9 @@ from math import (
 )
 
 
-ADDON_OBJECT_PREFIX = '||sprshtt_addon_object_'
+_ADDON_OBJECT_PREFIX = '||sprshtt_addon_object_'
+_FILE_FORMATS = ['PNG', 'BMP', 'JPEG', 'JPEG2000', 'TARGA', 'TARGA_RAW']
+_FILE_FORMATS_EXTENSIONS = ['png', 'jpeg', 'jpeg', 'targa', 'targa']
 
 # Addon Functionalities
 
@@ -61,24 +63,28 @@ def render_to_path(context, target_filepath :str, target_filename: str):
     context.scene.render.filepath = curr_filepath
 
 def b_check_object_mode(context):
+    """ Checks if blender mode is in object mode """
     if context.active_object and not context.active_object.mode == 'OBJECT':
         return False
     return True
 
 def void_assert_object_mode(context):
+    """ Asserts blender mode in object mode """
     if not b_check_object_mode(context=context):
         print(f'WARNING: Reverting {context.active_object.mode} into OBJECT mode on object {context.active_object.name}`.')
         bpy.ops.object.mode_set(mode='OBJECT')
 
 def i_wrap_overflow(n, min_v, max_v):
+    """ int overflow wrap-around based on args min-v and max-v """
     n_range = max_v - min_v
     n = n % n_range
     return min_v + n
 
 def s_get_addon_object_prefix(mid:str = '') -> str:
+    """ get addon object default prefix based on mid str """
     if mid:
-        return ADDON_OBJECT_PREFIX + mid + '_'
-    return ADDON_OBJECT_PREFIX
+        return _ADDON_OBJECT_PREFIX + mid + '_'
+    return _ADDON_OBJECT_PREFIX
 
 def s_gen_rand_addon_name(mid: str = '') -> str:
     """ Generates unique object name with predefined prefix """
@@ -110,10 +116,13 @@ def void_delete_objects_from_scene(objs: list):
             bpy.data.objects.remove(obj, do_unlink=True) 
 
 def void_delete_objects_with_prefix(prefix: str):
+    """ Deletes objects with prefix from scene """
     void_delete_objects_from_scene(ls_objects_with_prefix(prefix))
 
 def var_decompose_object_bbox_dim(obj: BObject):
-    """ Calculates relative bounding box dimension """
+    """ Calculates relative bounding box dimension 
+    returns center<Vector>, dim<Vector>, rot<Euler>
+    """
     rot = obj.rotation_euler.copy()
     dim = obj.dimensions.to_3d()
     corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
@@ -123,6 +132,7 @@ def var_decompose_object_bbox_dim(obj: BObject):
     return Vector(center), dim, rot
 
 def void_move_object_along_vector(obj: BObject, vec=(0,0,1), offset: float = 0.0):
+    """ Move target object along vector """
     if not isinstance(vec, Vector):
         vec = Vector(vec)
     if isclose(offset, 0):
@@ -153,6 +163,7 @@ def void_move_object_along_vector(obj: BObject, vec=(0,0,1), offset: float = 0.0
     return obj
 
 def void_pivot_object_along_target_locals(obj: BObject, pivot_obj: BObject, pivot_axis_enum, offset_angle: float):
+    """ Rotates object based on target local axis vector """
     if pivot_axis_enum not in ['X', 'Y', 'Z']:
         return obj
     if isclose(offset_angle, 0):
@@ -174,14 +185,14 @@ def void_pivot_object_along_target_locals(obj: BObject, pivot_obj: BObject, pivo
 
 # Property Event Handlers
 
-def void_callback_on_counter_update(_self, context):
-    if _self.int_camera_rotation_increment_limit <= _self.int_camera_rotation_preview:
-        _self.int_camera_rotation_preview = _self.int_camera_rotation_increment_limit - 1
-    void_callback_on_increment_prop_update(_self, context)
+def void_callback_on_counter_update(self, context):
+    if self.int_camera_rotation_increment_limit <= self.int_camera_rotation_preview:
+        self.int_camera_rotation_preview = self.int_camera_rotation_increment_limit - 1
+    void_callback_on_increment_prop_update(self, context)
 
-def void_callback_on_camera_update(_self, context):
-    camera_object = _self.collection_target_cameras
-    target_object = _self.collection_target_objects
+def void_callback_on_camera_update(self, context):
+    camera_object = self.collection_target_cameras
+    target_object = self.collection_target_objects
     _, target_dim, _  = var_decompose_object_bbox_dim(target_object)
 
     if not camera_object or not target_object:
@@ -197,36 +208,36 @@ def void_callback_on_camera_update(_self, context):
         camera_object, 
         loc, 
         rot, 
-        Vector((_self.float_distance_offset,0,0)), 
-        Euler((_self.float_camera_angle_pitch, _self.float_camera_angle_roll, _self.float_camera_angle_yaw))
+        Vector((self.float_distance_offset,0,0)), 
+        Euler((self.float_camera_angle_pitch, self.float_camera_angle_roll, self.float_camera_angle_yaw))
     )
 
     void_prop_setter_camera_intrinsic(
         camera_object, 
-        _self.enum_camera_type, 
+        self.enum_camera_type, 
         (
-            _self.float_distance_offset - target_dim.length * 1.5,
-            _self.float_distance_offset + target_dim.length * 1.5,
+            self.float_distance_offset - target_dim.length * 1.5,
+            self.float_distance_offset + target_dim.length * 1.5,
         ),
-        _self.float_camera_field_of_view,
-        _self.float_camera_ortho_scale
+        self.float_camera_field_of_view,
+        self.float_camera_ortho_scale
     )
 
-    angle = (_self.int_camera_rotation_preview/_self.int_camera_rotation_increment_limit) * 2 * pi
+    angle = (self.int_camera_rotation_preview/self.int_camera_rotation_increment_limit) * 2 * pi
     void_pivot_object_along_target_locals(camera_object, helper_object, 'Z', angle)
 
-def void_callback_on_increment_prop_update(_self, context):
+def void_callback_on_increment_prop_update(self, context):
     # side note:
     # updating the value directly from context->scene->prop will call the setter event on the attr instead,
-    # thus this will not trigger update event on _self and cause infinite recursion!
+    # thus this will not trigger update event on self and cause infinite recursion!
     scene = context.scene
     addon_prop = scene.sprshtt_properties
 
     addon_prop['int_camera_rotation_preview'] = \
-        i_wrap_overflow(_self.int_camera_rotation_preview, 0, _self.int_camera_rotation_increment_limit)
-    void_callback_on_camera_update(_self, context)
+        i_wrap_overflow(self.int_camera_rotation_preview, 0, self.int_camera_rotation_increment_limit)
+    void_callback_on_camera_update(self, context)
 
-def void_callback_on_frame_skip_prop_update(_self, context):
+def void_callback_on_frame_skip_prop_update(self, context):
     scene = context.scene
     addon_prop = scene.sprshtt_properties
 
@@ -492,19 +503,21 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
         void_delete_objects_with_prefix(s_get_addon_object_prefix())
 
         bpy.ops.object.empty_add(type='SINGLE_ARROW', radius=dim.length, location=coord, rotation=rot)
-        obj = bpy.context.selected_objects[0]
-        obj.name = s_gen_rand_addon_name('axis-helper-arrow')
-        obj.empty_display_size = dim.length
-        if abs(dim.z) <= 1: obj.empty_display_size = 1
+        obj_helper_arrow = bpy.context.selected_objects[0]
+        obj_helper_arrow.name = s_gen_rand_addon_name('axis-helper-arrow')
+        obj_helper_arrow.empty_display_size = dim.length
+        obj_helper_arrow.hide_selects = True
+        if abs(dim.z) <= 1: obj_helper_arrow.empty_display_size = 1
 
         rot.rotate_axis('X', pi/2)
 
         bpy.ops.object.empty_add(type='CIRCLE', radius=dim.length, location=coord, rotation=rot)
-        obj = bpy.context.selected_objects[0]
-        obj.name = s_gen_rand_addon_name('axis-helper-circle')
-        obj.empty_display_size = dim.length
-        obj.show_axis = True
-        if abs(dim.z) <= 1: obj.empty_display_size = 1
+        obj_helper_circle = bpy.context.selected_objects[0]
+        obj_helper_circle.name = s_gen_rand_addon_name('axis-helper-circle')
+        obj_helper_circle.empty_display_size = dim.length
+        obj_helper_circle.show_axis = True
+        obj_helper_circle.hide_selects = True
+        if abs(dim.z) <= 1: obj_helper_circle.empty_display_size = 1
 
         bpy.ops.object.select_all(action='DESELECT')
 
@@ -516,7 +529,7 @@ class SPRSHTT_OP_CreateHelperObject(Operator):
 
 
 class SPRSHTT_OP_CreateCamera(Operator):
-    """ Create custom camera """
+    """ Spawns custom camera """
     bl_idname = 'object.sprshtt_create_camera'
     bl_label = "Create Custom Camera"
 
@@ -582,17 +595,18 @@ class SPRSHTT_OP_Render(Operator):
         scene = context.scene
         addon_prop = scene.sprshtt_properties
 
+        render_file_format = scene.render.image_settings.file_format
+        if render_file_format not in _FILE_FORMATS:
+            self.report({'INFO'}, f'File format not supported: {render_file_format}')
+            return {'CANCELLED'}
+
+        render_file_ext = _FILE_FORMATS_EXTENSIONS[_FILE_FORMATS.index(render_file_format)]
+
         target_name = addon_prop.collection_target_objects.name
         render_subfolder = addon_prop.str_export_folder
         render_file_suffix = addon_prop.str_file_suffix
-        render_file_format = scene.render.image_settings.file_format
         render_fp = abspath(scene.render.filepath)
         render_fp = native_pathsep(render_fp)
-
-        bitmap_file_formats = ['PNG', 'BMP', 'JPEG', 'JPEG2000', 'TARGA', 'TARGA_RAW', 'IRIS']
-        if render_file_format not in bitmap_file_formats:
-            self.report({'INFO'}, f'File format not supported: {render_file_format}')
-            return {'CANCELLED'}
 
         if not render_file_suffix:
             render_file_suffix = target_name
@@ -631,7 +645,7 @@ class SPRSHTT_OP_Render(Operator):
             while frame < frame_end:
                 scene.frame_current = frame
                 frame += frame_skip
-                filename = f'f{frame:06}.{render_file_format.lower()}'
+                filename = f'f{frame:06}.{render_file_ext}'
                 render_to_path(context, render_sub_sub_sub_folder, filename)
 
         return {'FINISHED'}
